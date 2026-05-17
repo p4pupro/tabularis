@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { FieldEditor } from "./FieldEditor";
 import { SlotAnchor } from "./SlotAnchor";
 import { useRowEditor } from "../../hooks/useRowEditor";
+import { useRowEditorResize } from "../../hooks/useRowEditorResize";
 
 interface RowEditorSidebarProps {
   isOpen: boolean;
@@ -45,6 +46,7 @@ export const RowEditorSidebar = ({
   schema,
 }: RowEditorSidebarProps) => {
   const { t } = useTranslation();
+  const { width, startResize } = useRowEditorResize();
   const { editedData, updateField } = useRowEditor({
     initialData: rowData,
     onChange: (fieldName, value) => onChange(fieldName, value),
@@ -78,7 +80,26 @@ export const RowEditorSidebar = ({
   return (
     <>
       {/* Sidebar */}
-      <div className="fixed right-0 top-0 bottom-0 w-96 bg-elevated border-l border-strong shadow-2xl z-[1001] flex flex-col animate-slide-in-right">
+      <div
+        className="fixed right-0 top-0 bottom-0 bg-elevated border-l border-strong shadow-2xl z-[1001] flex flex-col animate-slide-in-right"
+        style={{ width: `${width}px` }}
+      >
+        {/* Drag handle */}
+        <button
+          type="button"
+          onMouseDown={startResize}
+          aria-label={t("rowEditor.resize", {
+            defaultValue: "Resize sidebar",
+          })}
+          title={t("rowEditor.resize", { defaultValue: "Resize sidebar" })}
+          className="absolute top-0 bottom-0 -left-1 w-2 cursor-col-resize group/resize z-10"
+        >
+          <span
+            aria-hidden
+            className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-px bg-default group-hover/resize:bg-blue-500 group-hover/resize:w-0.5 transition-all"
+          />
+        </button>
+
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-default bg-base">
           <div>
