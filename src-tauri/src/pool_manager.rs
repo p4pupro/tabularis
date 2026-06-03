@@ -79,8 +79,21 @@ fn mysql_numeric_setting(key: &str, default: u64) -> u64 {
 /// Build a stable connection key that works with SSH tunnels.
 /// If connection_id is provided (from saved connections), use it for stable pooling.
 /// Otherwise fall back to host:port:database (for ad-hoc connections).
-fn build_connection_key(params: &ConnectionParams, connection_id: Option<&str>) -> String {
-    if let Some(conn_id) = connection_id {
+pub(crate) fn build_connection_key(
+    params: &ConnectionParams,
+    connection_id: Option<&str>,
+) -> String {
+    let tls_key = (params.driver == "mysql").then(|| {
+        format!(
+            "ssl:{}:{}:{}:{}",
+            params.ssl_mode.as_deref().unwrap_or("default"),
+            params.ssl_ca.as_deref().unwrap_or(""),
+            params.ssl_cert.as_deref().unwrap_or(""),
+            params.ssl_key.as_deref().unwrap_or("")
+        )
+    });
+
+    let base_key = if let Some(conn_id) = connection_id {
         // Include database in key so different databases on the same connection use separate pools
         format!("{}:conn:{}:{}", params.driver, conn_id, params.database)
     } else {
@@ -92,10 +105,16 @@ fn build_connection_key(params: &ConnectionParams, connection_id: Option<&str>) 
             params.port.unwrap_or(0),
             params.database
         )
+    };
+
+    if let Some(tls_key) = tls_key {
+        format!("{base_key}:{tls_key}")
+    } else {
+        base_key
     }
 }
 
-fn build_mysql_options(
+pub(crate) fn build_mysql_options(
     params: &ConnectionParams,
     override_db: Option<&str>,
 ) -> Result<sqlx::mysql::MySqlConnectOptions, String> {
