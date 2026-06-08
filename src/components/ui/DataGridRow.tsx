@@ -124,7 +124,6 @@ export interface MemoRowProps {
   pkVal: string | null;
   editingColIndex: number | null;
   editingValue: unknown;
-  editingIsRawSql?: boolean;
   focusedColIndex: number | null;
   expandedColIndex: number | null;
   expandedKind: "json" | "text" | null;
@@ -141,7 +140,6 @@ export const MemoRow = React.memo(function MemoRow(rowCtx: MemoRowProps) {
     pkVal,
     editingColIndex,
     editingValue,
-    editingIsRawSql,
     focusedColIndex,
     expandedColIndex,
     expandedKind,
@@ -190,7 +188,6 @@ export const MemoRow = React.memo(function MemoRow(rowCtx: MemoRowProps) {
           rowIndex,
           colIndex: editingColIndex,
           value: editingValue,
-          isRawSql: editingIsRawSql,
         }
       : null;
   const focusedCell =

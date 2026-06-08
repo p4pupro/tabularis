@@ -735,27 +735,6 @@ export const DataGrid = React.memo(
                 </div>
               );
             },
-            cell: (info) => {
-              const val = info.getValue();
-              const colName = info.column.id;
-              const colType = columnTypeMap?.get(colName);
-              const formatted = formatCellValue(
-                val,
-                t("dataGrid.null"),
-                colType,
-                columnLengthMap?.get(colName),
-              );
-
-              // The <generated> placeholder logic for auto-increment columns is handled
-              // in the main render loop where we have full context (isInsertion, etc).
-
-              // Apply styling for null values
-              if (val === null || val === undefined) {
-                return <span className="text-muted italic">{formatted}</span>;
-              }
-
-              return formatted;
-            },
           }),
         ),
       [
@@ -764,8 +743,6 @@ export const DataGrid = React.memo(
         t,
         sortClause,
         onSort,
-        columnTypeMap,
-        columnLengthMap,
       ],
     );
 
@@ -1328,7 +1305,6 @@ export const DataGrid = React.memo(
                       pkVal={pkVal}
                       editingColIndex={isRowEditing ? editingCell!.colIndex : null}
                       editingValue={isRowEditing ? editingCell!.value : undefined}
-                      editingIsRawSql={isRowEditing ? editingCell!.isRawSql : undefined}
                       focusedColIndex={isRowFocused ? focusedCell!.colIndex : null}
                       expandedColIndex={isRowExpanded ? expandedCell!.colIndex : null}
                       expandedKind={isRowExpanded ? expandedCell!.kind : null}
