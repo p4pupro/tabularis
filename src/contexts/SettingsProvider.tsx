@@ -234,7 +234,7 @@ export const SettingsProvider = ({ children }: { children: ReactNode }) => {
     };
 
     loadSettings();
-  }, [isLanguageApplied, queueLanguageApplication]);
+  }, []);
 
   // Update i18n when language changes
   useEffect(() => {

@@ -77,7 +77,7 @@ export async function focusWindowForApproval(approvalId: string): Promise<void> 
   approvalAttentionOwnerId = approvalId;
   const version = ++approvalAttentionVersion;
 
-  if (windowAttentionSnapshot === undefined) {
+  if (windowAttentionSnapshot === undefined || windowAttentionSnapshotApprovalId !== approvalId) {
     windowAttentionSnapshot = await captureWindowAttentionSnapshot(appWindow).catch(
       () => null,
     );

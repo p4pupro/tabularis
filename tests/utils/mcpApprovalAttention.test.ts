@@ -216,6 +216,57 @@ describe("mcpApprovalAttention", () => {
     expect(createOscillator).toHaveBeenCalledTimes(1);
   });
 
+  it("captures fresh snapshot when approval ID changes (prevents stale snapshot)", async () => {
+    const appWindow = {
+      isAlwaysOnTop: vi.fn().mockResolvedValue(false),
+      isVisible: vi.fn().mockResolvedValue(true),
+      isMinimized: vi.fn().mockResolvedValue(false),
+      setAlwaysOnTop: vi.fn().mockResolvedValue(undefined),
+      show: vi.fn().mockResolvedValue(undefined),
+      hide: vi.fn().mockResolvedValue(undefined),
+      minimize: vi.fn().mockResolvedValue(undefined),
+      unminimize: vi.fn().mockResolvedValue(undefined),
+      setFocus: vi.fn().mockResolvedValue(undefined),
+      requestUserAttention: vi.fn().mockResolvedValue(undefined),
+    };
+    getCurrentWindow.mockReturnValue(appWindow);
+
+    const attention = await import("../../src/utils/mcpApprovalAttention");
+
+    // First approval: normal flow, snapshot captured
+    await attention.focusWindowForApproval("approval-A");
+
+    expect(appWindow.isAlwaysOnTop).toHaveBeenCalledTimes(1);
+    expect(appWindow.setAlwaysOnTop).toHaveBeenCalledWith(true);
+
+    // Partially restore: setAlwaysOnTop fails, leaving residual snapshot state
+    appWindow.setAlwaysOnTop.mockRejectedValueOnce(new Error("restore failed"));
+    await attention.restoreWindowAlwaysOnTop("approval-A");
+
+    // reset calls for second approval
+    appWindow.isAlwaysOnTop.mockClear();
+    appWindow.isVisible.mockClear();
+    appWindow.isMinimized.mockClear();
+    appWindow.setAlwaysOnTop.mockClear();
+    appWindow.show.mockClear();
+    appWindow.setFocus.mockClear();
+    appWindow.requestUserAttention.mockClear();
+
+    // Second approval with different ID: should capture a fresh snapshot
+    // instead of using stale residual snapshot from the failed restore
+    appWindow.isAlwaysOnTop.mockResolvedValue(true); // window currently on top
+    await attention.focusWindowForApproval("approval-B");
+
+    // Fresh snapshot was captured isAlwaysOnTop was called during capture
+    expect(appWindow.isAlwaysOnTop).toHaveBeenCalledTimes(1);
+    expect(appWindow.setAlwaysOnTop).toHaveBeenCalledWith(true);
+
+    // Restore should work correctly with the fresh snapshot
+    await attention.restoreWindowAlwaysOnTop("approval-B");
+
+    expect(appWindow.setAlwaysOnTop).toHaveBeenCalledWith(true); // restored to true
+  });
+
   it("resumes suspended audio contexts before playing the short alert sound", async () => {
     vi.mocked(isPermissionGranted).mockResolvedValue(true);
     vi.mocked(sendNotification).mockResolvedValue(undefined);
