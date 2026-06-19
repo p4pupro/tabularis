@@ -55,7 +55,7 @@ export const parseTablesFromQuery = (sql: string): Map<string, ParsedTableRef> |
     const schema = schemaToken ? stripIdentifierQuotes(schemaToken) : undefined;
     const aliasToken = match[3];
     const alias = aliasToken ? stripIdentifierQuotes(aliasToken) : tableName;
-    tableMap.set(alias.toLowerCase(), { name: tableName, schema });
+    tableMap.set(alias, { name: tableName, schema });
   }
 
   return tableMap.size > 0 ? tableMap : null;
