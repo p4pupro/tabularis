@@ -46,7 +46,6 @@ export const Connections = () => {
     isConnectionOpen,
     switchConnection,
     connectionGroups,
-    createGroup,
     createGroupPath,
     updateGroup,
     moveGroupToParent,
@@ -569,7 +568,7 @@ export const Connections = () => {
       }
 
       if (reparent) {
-        const isAncestor = (maybeAncestorId: string): boolean => {
+        const isAncestor = (): boolean => {
           let cur = connectionGroups.find((g) => g.id === targetGroupId);
           while (cur) {
             if (cur.id === sourceGroupId) return true;
@@ -577,7 +576,7 @@ export const Connections = () => {
           }
           return false;
         };
-        if (sourceDepth > 0 || isAncestor(targetGroupId)) {
+        if (sourceDepth > 0 || isAncestor()) {
           setError(
             t("groups.cannotMoveIntoDescendant", {
               defaultValue: "Cannot move a group into one of its own subfolders",
