@@ -647,6 +647,7 @@ export const Connections = () => {
           <GroupHeader
             {...groupHeaderProps(group)}
             connCount={connCount}
+            depth={depth}
           />
           {subgroupInputFor === group.id && (
             <div
@@ -698,7 +699,7 @@ export const Connections = () => {
                   ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"
                   : "flex flex-col gap-1.5"
               }
-              style={{ paddingLeft: 24 + indentPx }}
+              style={{ paddingLeft: 24 + indentPx + (depth + 1) * 20 }}
             >
               {groupConns.map((conn) =>
                 mode === "grid" ? (

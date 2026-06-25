@@ -18,6 +18,7 @@ export interface GroupHeaderProps {
   onGripMouseDown?: (e: React.MouseEvent) => void;
   isDragOver?: boolean;
   onCreateSubgroup?: (groupId: string) => void;
+  depth?: number;
 }
 
 export const GroupHeader = ({
@@ -35,12 +36,14 @@ export const GroupHeader = ({
   onGripMouseDown,
   isDragOver,
   onCreateSubgroup,
+  depth = 0,
 }: GroupHeaderProps) => (
   <div
     className={clsx(
       "flex items-center gap-2 group cursor-pointer rounded-lg",
       isDragOver && "ring-1 ring-blue-400 bg-blue-500/5"
     )}
+    style={{ paddingLeft: depth > 0 ? Math.min(depth, 6) * 20 : 0 }}
     onClick={onToggleCollapse}
     onContextMenu={(e) => {
       e.preventDefault();
