@@ -4084,18 +4084,12 @@ pub async fn create_connection_group<R: Runtime>(
     let path = get_config_path(&app)?;
     let mut file = persistence::load_connections_file(&path).unwrap_or_default();
 
-    // Validate parent_id up-front: it must point to an existing group.
-    // Cycle detection isn't needed here because the new group has no
-    // descendants yet, but we still reject a parent_id that doesn't exist
-    // to keep the data consistent.
     if let Some(pid) = &parent_id {
         if !file.groups.iter().any(|g| &g.id == pid) {
             return Err(format!("Parent group with ID {} not found", pid));
         }
     }
 
-    // sort_order is per-parent: a new sibling is appended at the end of its
-    // sibling chain, even if there are groups elsewhere in the tree.
     let max_order = file
         .groups
         .iter()
@@ -4150,15 +4144,8 @@ pub async fn update_connection_group<R: Runtime>(
 
     Ok(updated)
 }
-
-/// Re-parent a group. The `parent_id` semantics match the rest of the
-/// connection-group API: pass `Some(group_id)` to make the group a child
-/// of that group, or `None` to make it a top-level root.
-///
-/// Cycles are rejected (a group cannot become its own ancestor) and the
-/// walk is bounded to fail-safe against pre-existing corruption in
-/// `connections.json`. See `reject_if_would_create_cycle` for the exact
-/// traversal rules.
+/// Re-parent a group. Pass `Some(id)` to make it a child of that group,
+/// or `None` to make it a top-level root. Cycles are rejected.
 #[tauri::command]
 pub async fn move_group_to_parent<R: Runtime>(
     app: AppHandle<R>,
@@ -4195,13 +4182,9 @@ pub async fn move_group_to_parent<R: Runtime>(
     Ok(updated)
 }
 
-/// Walk up the parent chain of `group_id` (the group being re-parented).
-/// If we encounter `new_parent_id`, the proposed change would create a
-/// cycle — `group_id` is already an ancestor of `new_parent_id`, so
-/// making `group_id` a child of `new_parent_id` would close the loop.
-///
-/// The walk is bounded by `groups.len()` to fail-safe against corrupted
-/// `connections.json` files where the data already contains a cycle.
+/// Reject re-parenting that would create a cycle: `target` must not be a
+/// descendant of `group_id`. Walks up from `target` looking for `group_id`.
+/// Bounded by `groups.len()` to fail-safe against pre-existing data cycles.
 pub(crate) fn reject_if_would_create_cycle(
     groups: &[ConnectionGroup],
     group_id: &str,
@@ -4210,12 +4193,6 @@ pub(crate) fn reject_if_would_create_cycle(
     let Some(target) = new_parent_id else {
         return Ok(());
     };
-    // The re-parenting `group_id → target` creates a cycle iff `target` is
-    // currently a descendant of `group_id`. We answer that by walking from
-    // `target` up the parent chain and checking whether we reach `group_id`.
-    // The trivial case `target == group_id` is also caught (a group cannot
-    // be its own parent); the command caller already guards it, but checking
-    // here keeps the helper self-contained.
     let mut current = Some(target.to_string());
     let mut visited = std::collections::HashSet::new();
     let max_steps = groups.len() + 1;
@@ -4229,9 +4206,6 @@ pub(crate) fn reject_if_would_create_cycle(
             }
             Some(node) => {
                 if !visited.insert(node.clone()) {
-                    // Pre-existing cycle in the data: bail out to avoid an
-                    // infinite loop. The user can hand-edit the file to
-                    // break the loop; the next save will write a sane graph.
                     return Err(
                         "Connection-group tree contains a pre-existing cycle; refusing to modify it"
                             .to_string(),
@@ -4267,23 +4241,18 @@ pub async fn delete_connection_group<R: Runtime>(
         .map(|g| g.parent_id.clone())
         .ok_or_else(|| format!("Group with ID {} not found", id))?;
 
-    // Re-parent direct children of the deleted group to the deleted group's
-    // parent. We only touch direct children — grand-children keep their
-    // existing parent (which is now a sibling of the deleted group).
     for g in &mut file.groups {
         if g.parent_id.as_ref() == Some(&id) {
             g.parent_id = deleted_parent.clone();
         }
     }
 
-    // Remove connections from the group (set group_id to None)
     for conn in &mut file.connections {
         if conn.group_id.as_ref() == Some(&id) {
             conn.group_id = None;
         }
     }
 
-    // Remove the group
     file.groups.retain(|g| g.id != id);
     save_connections_and_invalidate(&app, &path, &file)?;
 

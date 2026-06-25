@@ -159,10 +159,7 @@ export const Connections = () => {
     [connectionGroups],
   );
 
-  // Build a parentId -> children map for nested-group rendering. Groups
-  // without a `parent_id` (or with `parent_id === null`) are top-level.
-  // The map is built per-render from the flat `connectionGroups` list so
-  // any change in the data (rename, re-parent, delete) flows through.
+  // parentId -> children, with null key for top-level groups
   const groupsByParent = useMemo(() => {
     const map = new Map<string | null, typeof connectionGroups>();
     for (const g of connectionGroups) {
@@ -171,7 +168,6 @@ export const Connections = () => {
       arr.push(g);
       map.set(key, arr);
     }
-    // Keep each child list sorted by sort_order for deterministic rendering.
     for (const [, arr] of map) {
       arr.sort((a, b) => a.sort_order - b.sort_order);
     }
@@ -219,21 +215,13 @@ export const Connections = () => {
     }
   };
 
-  // Inline subfolder creator: prompts for a name and creates a subgroup
-  // under the given parent. Used by the "New subfolder" entry in the
-  // group context menu.
   const handleCreateSubgroup = async (parentGroupId: string) => {
     const name = window.prompt(
       t("groups.subgroupNamePrompt", { defaultValue: "Subfolder name" }),
     );
     if (!name || !name.trim()) return;
     try {
-      const previousName = newGroupName;
-      setNewGroupName(name.trim());
-      // Reuse handleCreateGroup by temporarily setting the new-group-name
-      // and calling it. This keeps the success/error path in one place.
       await createGroup(name.trim(), parentGroupId);
-      setNewGroupName(previousName);
       await loadConnections();
     } catch (e) {
       console.error("Failed to create subgroup:", e);
@@ -532,14 +520,7 @@ export const Connections = () => {
       setDragOverGroupId(null);
       if (!targetGroupId || targetGroupId === sourceGroupId) return;
 
-      // Decide between two actions based on horizontal offset:
-      //   - If the cursor is over the right half of the target group
-      //     (i.e. cursor X is past the target's horizontal midpoint +
-      //     the source's indent), the user is dropping INTO it as a
-      //     child. Backend's cycle check prevents descendant-loops.
-      //   - Otherwise, fall back to top-level reorder, preserving
-      //     existing behavior for users who just want to re-order
-      //     groups at the same level.
+      // Drop right of target's left edge => re-parent as child; else reorder
       const targetEl = document.querySelector(
         `[data-group-id="${targetGroupId}"]`,
       ) as HTMLElement | null;
@@ -551,18 +532,11 @@ export const Connections = () => {
       let reparent = false;
       if (targetEl) {
         const rect = targetEl.getBoundingClientRect();
-        const indentStep = 16; // matches `Math.min(depth, 6) * 16`
-        // Drop-in is allowed only when the cursor lands to the right of
-        // the target's left edge plus one indent step. This avoids
-        // accidental re-parenting when the user is just re-ordering at
-        // the same depth and crosses the target's header horizontally.
+        const indentStep = 16;
         reparent = ev.clientX > rect.left + indentStep;
       }
 
       if (reparent) {
-        // Prevent dropping a parent into its own descendant by walking
-        // the source's ancestor chain (cheap O(depth) check; the
-        // backend will still reject malformed drops).
         const isAncestor = (maybeAncestorId: string): boolean => {
           let cur = connectionGroups.find((g) => g.id === targetGroupId);
           while (cur) {
@@ -572,9 +546,6 @@ export const Connections = () => {
           return false;
         };
         if (sourceDepth > 0 || isAncestor(targetGroupId)) {
-          // The target is already a descendant of the source. Refuse
-          // silently in the UI; the backend would have rejected this
-          // anyway.
           setError(
             t("groups.cannotMoveIntoDescendant", {
               defaultValue: "Cannot move a group into one of its own subfolders",
@@ -619,11 +590,6 @@ export const Connections = () => {
     isDragOver: dragOverGroupId === group.id && draggingGroupId !== group.id,
   });
 
-  // Recursive group tree renderer. Walks `groupsByParent` starting at
-  // `parentId` (null = root) and produces the nested JSX. Children are
-  // indented by `depth * 16px`, capped at 6 levels to avoid runaway
-  // visual indent on deep trees. Collapsed groups hide both their
-  // connections AND their sub-groups, matching sidebar behavior.
   const renderGroupTree = (
     parentId: string | null,
     mode: "grid" | "list",
@@ -634,15 +600,10 @@ export const Connections = () => {
     return children.map((group) => {
       const groupConns = filteredGroupedConnections[group.id] || [];
       const isCollapsed = collapsedGroups.has(group.id);
-      // Skip rendering groups that have no connections (direct or
-      // descendant) when searching, to keep results relevant.
       if (search.trim() && !hasAnyMatchingDescendant(group.id, search)) {
         return null;
       }
       const indentPx = Math.min(depth, 6) * 16;
-      // Header shows the total of this group + all descendant groups
-      // so users can see at a glance that a folder contains things
-      // even when they live in sub-folders.
       const connCount = countDescendantConnections(group.id);
       return (
         <div
@@ -676,17 +637,12 @@ export const Connections = () => {
               )}
             </div>
           )}
-          {/* Recurse into subgroups (also hidden when this group is collapsed) */}
           {!isCollapsed && renderGroupTree(group.id, mode, depth + 1)}
         </div>
       );
     });
   };
 
-  // Helper used by `renderGroupTree` to decide whether a group has any
-  // visible descendant under an active search filter. Returns true if
-  // the group itself has at least one matching connection OR if any of
-  // its descendant groups does. Walks the `groupsByParent` map.
   const hasAnyMatchingDescendant = (
     rootGroupId: string,
     query: string,
@@ -698,22 +654,16 @@ export const Connections = () => {
       const id = stack.pop()!;
       if (visited.has(id)) continue;
       visited.add(id);
-      // Check direct connections of this group
       const conns = filteredGroupedConnections[id] || [];
       if (conns.length > 0) return true;
-      // Check name itself (in case the group is what user searched)
       const g = connectionGroups.find((x) => x.id === id);
       if (g && g.name.toLowerCase().includes(lc)) return true;
-      // Descend
       const kids = groupsByParent.get(id) ?? [];
       for (const kid of kids) stack.push(kid.id);
     }
     return false;
   };
 
-  // Counts connections across this group and all its descendants.
-  // Used for the "(N)" badge on group headers so a folder that holds
-  // only sub-folders with connections still reports a non-zero count.
   const countDescendantConnections = (groupId: string): number => {
     let total = 0;
     const stack: string[] = [groupId];

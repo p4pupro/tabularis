@@ -1,8 +1,8 @@
 //! Unit tests for the nested connection-group tree helpers in `commands.rs`.
 //!
-//! These tests cover the cycle detector that gates `update_connection_group`
-//! re-parenting. The cycle detector is a pure function over a slice of
-//! `ConnectionGroup`s, so it doesn't need any Tauri runtime or filesystem.
+//! Covers the cycle detector that gates re-parenting. Pure function over a
+//! slice of `ConnectionGroup`s, so it doesn't need any Tauri runtime or
+//! filesystem.
 
 #[cfg(test)]
 mod tests {
@@ -21,15 +21,12 @@ mod tests {
 
     #[test]
     fn cycle_check_none_parent_is_always_ok() {
-        // Moving a group to the top level (parent_id = None) is always fine.
         let groups = vec![g("a", None), g("b", Some("a")), g("c", Some("b"))];
         assert!(reject_if_would_create_cycle(&groups, "c", None).is_ok());
     }
 
     #[test]
     fn cycle_check_same_id_is_rejected() {
-        // Should be caught by the explicit id check before this helper runs,
-        // but the helper is the last line of defence.
         let groups = vec![g("a", None)];
         let err = reject_if_would_create_cycle(&groups, "a", Some("a")).unwrap_err();
         assert!(err.to_lowercase().contains("cycle"));
@@ -37,8 +34,6 @@ mod tests {
 
     #[test]
     fn cycle_check_direct_parent_is_rejected() {
-        // a -> b, trying to make a's parent = b would close the loop
-        // (a is already b's ancestor).
         let groups = vec![g("a", Some("b")), g("b", None)];
         let err = reject_if_would_create_cycle(&groups, "b", Some("a")).unwrap_err();
         assert!(err.to_lowercase().contains("cycle"));
@@ -46,9 +41,6 @@ mod tests {
 
     #[test]
     fn cycle_check_deep_descendant_is_rejected() {
-        // Tree: a -> b -> c (c is a deep descendant of a). Trying to make
-        // c's parent = a closes the loop: c -> a -> b -> c.
-        // The walk from `a` reaches `c` after two steps: a -> b -> c.
         let groups = vec![
             g("a", Some("b")),
             g("b", Some("c")),
@@ -60,7 +52,6 @@ mod tests {
 
     #[test]
     fn cycle_check_unrelated_target_is_ok() {
-        // Two independent trees; moving one root under the other is fine.
         let groups = vec![
             g("a1", Some("a")),
             g("a", None),
@@ -72,25 +63,14 @@ mod tests {
 
     #[test]
     fn cycle_check_handles_preexisting_cycle_safely() {
-        // If the data on disk already has a cycle (e.g. hand-edited
-        // connections.json), the helper should NOT spin forever. It
-        // detects the loop via the visited set and returns a clear error.
-        // Asking about a third, unrelated group still resolves cleanly
-        // because the walk doesn't traverse into the cycle.
         let c = g("c", None);
         let groups = vec![g("a", Some("b")), g("b", Some("a")), c];
         let result = reject_if_would_create_cycle(&groups, "c", Some("a"));
-        // The walk from `a` enters the {a,b} cycle and bails out with the
-        // pre-existing-cycle error rather than looping.
         assert!(result.is_err());
     }
 
     #[test]
     fn cycle_check_target_not_in_tree_is_ok() {
-        // The helper assumes parent_id has been validated separately
-        // (i.e. it points to an existing group). The cycle walk still
-        // terminates if the chain ends at a node that exists but isn't the
-        // group being re-parented.
         let groups = vec![g("a", None), g("b", Some("a"))];
         assert!(reject_if_would_create_cycle(&groups, "b", Some("a")).is_ok());
     }
