@@ -47,6 +47,7 @@ export const Connections = () => {
     switchConnection,
     connectionGroups,
     createGroup,
+    createGroupPath,
     updateGroup,
     moveGroupToParent,
     deleteGroup,
@@ -82,6 +83,8 @@ export const Connections = () => {
   } | null>(null);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editGroupName, setEditGroupName] = useState("");
+  const [subgroupInputFor, setSubgroupInputFor] = useState<string | null>(null);
+  const [subgroupInputValue, setSubgroupInputValue] = useState("");
   const [confirmModal, setConfirmModal] = useState<{
     title: string;
     message: string;
@@ -205,7 +208,9 @@ export const Connections = () => {
   const handleCreateGroup = async (parentId?: string | null) => {
     if (!newGroupName.trim()) return;
     try {
-      await createGroup(newGroupName.trim(), parentId ?? null);
+      // `/` separates nested levels: "TEST/flexways" creates `flexways`
+      // inside the existing `TEST` group, or both if TEST doesn't exist.
+      await createGroupPath(newGroupName.trim(), parentId ?? null);
       setNewGroupName("");
       setIsCreatingGroup(false);
       await loadConnections();
@@ -217,11 +222,38 @@ export const Connections = () => {
 
   const handleCreateSubgroup = async (parentGroupId: string) => {
     const name = window.prompt(
-      t("groups.subgroupNamePrompt", { defaultValue: "Subfolder name" }),
+      t("groups.subgroupNamePrompt", { defaultValue: "Subfolder name (use / for nested levels)" }),
     );
     if (!name || !name.trim()) return;
     try {
-      await createGroup(name.trim(), parentGroupId);
+      await createGroupPath(name.trim(), parentGroupId);
+      await loadConnections();
+    } catch (e) {
+      console.error("Failed to create subgroup:", e);
+      setError(t("groups.createError"));
+    }
+  };
+
+  const startInlineSubgroupInput = (parentGroupId: string) => {
+    setSubgroupInputFor(parentGroupId);
+    setSubgroupInputValue("");
+  };
+
+  const cancelInlineSubgroupInput = () => {
+    setSubgroupInputFor(null);
+    setSubgroupInputValue("");
+  };
+
+  const confirmInlineSubgroupInput = async () => {
+    if (!subgroupInputFor) return;
+    const name = subgroupInputValue.trim();
+    if (!name) {
+      cancelInlineSubgroupInput();
+      return;
+    }
+    try {
+      await createGroupPath(name, subgroupInputFor);
+      cancelInlineSubgroupInput();
       await loadConnections();
     } catch (e) {
       console.error("Failed to create subgroup:", e);
@@ -588,6 +620,7 @@ export const Connections = () => {
     onRenameConfirm: handleRenameGroup,
     onGripMouseDown: (e: React.MouseEvent) => handleGripMouseDown(e, group.id),
     isDragOver: dragOverGroupId === group.id && draggingGroupId !== group.id,
+    onCreateSubgroup: startInlineSubgroupInput,
   });
 
   const renderGroupTree = (
@@ -616,6 +649,49 @@ export const Connections = () => {
             {...groupHeaderProps(group)}
             connCount={connCount}
           />
+          {subgroupInputFor === group.id && (
+            <div
+              className="flex items-center gap-2"
+              style={{ paddingLeft: 24 + indentPx }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <FolderPlus size={12} className="text-amber-400 shrink-0" />
+              <input
+                type="text"
+                value={subgroupInputValue}
+                onChange={(e) => setSubgroupInputValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void confirmInlineSubgroupInput();
+                  if (e.key === "Escape") cancelInlineSubgroupInput();
+                }}
+                onBlur={() => {
+                  if (subgroupInputValue.trim()) {
+                    void confirmInlineSubgroupInput();
+                  } else {
+                    cancelInlineSubgroupInput();
+                  }
+                }}
+                placeholder="Subfolder name (use / for nested)"
+                autoFocus
+                className="flex-1 px-2 py-1 bg-elevated border border-strong rounded text-sm text-primary placeholder:text-muted focus:border-amber-500/70 focus:outline-none"
+              />
+              <button
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => void confirmInlineSubgroupInput()}
+                disabled={!subgroupInputValue.trim()}
+                className="p-1 rounded bg-amber-600 hover:bg-amber-500 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                <Plus size={12} />
+              </button>
+              <button
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={cancelInlineSubgroupInput}
+                className="p-1 rounded text-muted hover:text-primary hover:bg-surface-secondary transition-colors"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )}
           {!isCollapsed && (
             <div
               className={
@@ -824,7 +900,9 @@ export const Connections = () => {
                         setNewGroupName("");
                       }
                     }}
-                    placeholder={t("groups.groupName")}
+                    placeholder={t("groups.groupName", {
+                      defaultValue: "Group name (use / for nested)",
+                    })}
                     autoFocus
                     className="w-40 px-3 py-2 bg-elevated border border-strong rounded-xl text-sm text-primary placeholder:text-muted focus:border-amber-500/70 focus:outline-none transition-colors"
                   />

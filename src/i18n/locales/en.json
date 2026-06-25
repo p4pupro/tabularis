@@ -1498,7 +1498,8 @@
     "createFirst": "Create your first group to organize connections",
     "groupName": "Group name",
     "dragHint": "Drag connections here",
-    "createError": "Failed to create group"
+    "createError": "Failed to create group",
+    "subgroupNamePrompt": "Subfolder name (use / for nested levels)"
   },
   "queryModal": {
     "database": "Database",

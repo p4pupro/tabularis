@@ -310,6 +310,7 @@ pub fn run() {
             commands::get_connection_groups,
             commands::get_connections_with_groups,
             commands::create_connection_group,
+            commands::create_group_path,
             commands::update_connection_group,
             commands::move_group_to_parent,
             commands::delete_connection_group,

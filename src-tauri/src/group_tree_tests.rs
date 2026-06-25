@@ -1,12 +1,12 @@
 //! Unit tests for the nested connection-group tree helpers in `commands.rs`.
 //!
-//! Covers the cycle detector that gates re-parenting. Pure function over a
-//! slice of `ConnectionGroup`s, so it doesn't need any Tauri runtime or
-//! filesystem.
+//! Covers the cycle detector and the `/`-separated path parser/lookup used
+//! by `create_group_path`. Pure functions, so they don't need any Tauri
+//! runtime or filesystem.
 
 #[cfg(test)]
 mod tests {
-    use crate::commands::reject_if_would_create_cycle;
+    use crate::commands::{find_child_group, parse_group_path, reject_if_would_create_cycle};
     use crate::models::ConnectionGroup;
 
     fn g(id: &str, parent: Option<&str>) -> ConnectionGroup {
@@ -73,5 +73,58 @@ mod tests {
     fn cycle_check_target_not_in_tree_is_ok() {
         let groups = vec![g("a", None), g("b", Some("a"))];
         assert!(reject_if_would_create_cycle(&groups, "b", Some("a")).is_ok());
+    }
+
+    #[test]
+    fn parse_group_path_splits_on_slash() {
+        assert_eq!(
+            parse_group_path("a/b/c").unwrap(),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_group_path_trims_whitespace_and_skips_empty() {
+        assert_eq!(
+            parse_group_path("  a /  /  b  / ").unwrap(),
+            vec!["a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_group_path_rejects_empty_string() {
+        assert!(parse_group_path("").is_err());
+        assert!(parse_group_path("   /  /  ").is_err());
+    }
+
+    #[test]
+    fn parse_group_path_keeps_single_segment() {
+        assert_eq!(parse_group_path("lone").unwrap(), vec!["lone".to_string()]);
+    }
+
+    #[test]
+    fn find_child_group_is_case_insensitive() {
+        // The `g` helper uses the id as the name, so "Production" here
+        // and a search for "production" should still match.
+        let groups = vec![g("Production", None)];
+        let found = find_child_group(&groups, "production", &None);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, "Production");
+    }
+
+    #[test]
+    fn find_child_group_scopes_to_parent() {
+        // Two groups named the same, but with different parents.
+        let groups = vec![
+            g("alpha", Some("parent-1")),
+            g("alpha", Some("parent-2")),
+        ];
+        // Only the one under "parent-1" is found.
+        let found = find_child_group(&groups, "alpha", &Some("parent-1".to_string()));
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, "alpha");
+        // Wrong parent yields None.
+        let missing = find_child_group(&groups, "alpha", &None);
+        assert!(missing.is_none());
     }
 }
