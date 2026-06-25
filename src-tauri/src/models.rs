@@ -125,9 +125,9 @@ pub struct ConnectionParams {
     pub ssl_ca: Option<String>,
     pub ssl_cert: Option<String>,
     pub ssl_key: Option<String>,
-    // AWS RDS IAM authentication: when true, `password` is expected to be a
-    // pre-signed RDS auth token (generate-db-auth-token) instead of a real
-    // user password. Requires TLS. Only meaningful for the `mysql` driver.
+    // When true, `password` is a pre-signed RDS auth token (from
+    // `aws rds generate-db-auth-token`) instead of a real password.
+    // Requires TLS; only meaningful for the `mysql` driver.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub use_iam_auth: Option<bool>,
     // SSH Tunnel

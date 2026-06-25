@@ -57,8 +57,7 @@ interface ConnectionParams {
   ssl_ca?: string;
   ssl_cert?: string;
   ssl_key?: string;
-  // AWS RDS IAM authentication (mysql only): when true, the password field
-  // holds a pre-signed RDS auth token instead of a real password.
+  // When true, the password field is an RDS auth token (mysql only).
   use_iam_auth?: boolean;
   // SSH
   ssh_enabled?: boolean;
@@ -1446,7 +1445,6 @@ export const NewConnectionModal = ({
             </div>
           </div>
 
-          {/* AWS RDS IAM authentication (mysql only) */}
           {driver === "mysql" && (
             <div className="pt-2 border-t border-strong/50">
               <label className="flex items-start gap-2 cursor-pointer">

@@ -19,8 +19,8 @@ use tokio::sync::RwLock;
 use tokio_postgres::{config::SslMode as PgSslMode, Config as PgConfig};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
-/// `tokio_postgres` renders only the top-level error kind ("error performing
-/// TLS handshake"); the concrete cause lives in the `source()` chain.
+/// Walks `Error::source()` to surface the real cause, which `tokio_postgres`
+/// hides behind a generic "error performing TLS handshake".
 pub(crate) fn format_error_chain<E: std::error::Error + ?Sized>(err: &E) -> String {
     let mut out = err.to_string();
     let mut source = err.source();
@@ -32,7 +32,6 @@ pub(crate) fn format_error_chain<E: std::error::Error + ?Sized>(err: &E) -> Stri
     out
 }
 
-/// rustls 0.23 needs a process-level `CryptoProvider`; install once.
 fn ensure_rustls_crypto_provider() {
     use std::sync::Once;
     static INSTALL: Once = Once::new();
@@ -76,9 +75,9 @@ fn mysql_numeric_setting(key: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
-/// Build a stable connection key that works with SSH tunnels.
-/// If connection_id is provided (from saved connections), use it for stable pooling.
-/// Otherwise fall back to host:port:database (for ad-hoc connections).
+/// Stable pool key: uses `connection_id` when present (saved connections),
+/// else `host:port:database` (ad-hoc). The TLS/iam tuple is appended so
+/// different SSL settings of the same connection get separate pools.
 pub(crate) fn build_connection_key(
     params: &ConnectionParams,
     connection_id: Option<&str>,
@@ -108,10 +107,8 @@ pub(crate) fn build_connection_key(
     };
 
     let base_key = if let Some(conn_id) = connection_id {
-        // Include database in key so different databases on the same connection use separate pools
         format!("{}:conn:{}:{}", params.driver, conn_id, params.database)
     } else {
-        // Fall back to host:port:database for ad-hoc connections
         format!(
             "{}:{}:{}:{}",
             params.driver,
@@ -141,22 +138,11 @@ pub(crate) fn build_mysql_options(
     let database = override_db.unwrap_or_else(|| params.database.primary());
     let timezone = mysql_string_setting("timezone", DEFAULT_MYSQL_TIMEZONE);
 
-    // Configure SSL mode based on params.ssl_mode.
-    //
-    // Auto-escalation: when the user supplies an explicit `ssl_ca` but the
-    // selected mode is `Required` or `Preferred`, sqlx-mysql with
-    // `tls-native-tls` (the default) does not actually pass the CA bundle to
-    // the TLS connector for those modes - it only does so for `VerifyCa` and
-    // `VerifyIdentity`. On macOS this means Secure Transport uses the system
-    // keychain, which does not trust the regional Amazon RDS root CAs, and
-    // the handshake fails with the opaque error
-    // "error occurred while attempting to establish a TLS connection:
-    // One or more parameters passed to a function were not valid." even
-    // though the same bundle validates fine with `openssl s_client`.
-    //
-    // Escalating to `VerifyCa` whenever a CA file is present mirrors the
-    // documented behaviour of `psql`'s `verify-ca` mode: the user has
-    // explicitly opted into a stricter check by supplying a CA file.
+    // ssl_mode: user-selected, with auto-escalation to VerifyCa when an ssl_ca
+    // is supplied under Required/Preferred. sqlx-mysql only forwards the CA
+    // bundle to the TLS connector for VerifyCa/VerifyIdentity, so on macOS the
+    // system keychain handles verification for the weaker modes and rejects
+    // the regional RDS root CAs with an opaque handshake error.
     let has_user_ca = params
         .ssl_ca
         .as_deref()
@@ -175,12 +161,9 @@ pub(crate) fn build_mysql_options(
         ssl_mode = MySqlSslMode::VerifyCa;
     }
 
-    // AWS RDS IAM authentication: when enabled, `password` holds a pre-signed
-    // RDS auth token (from `aws rds generate-db-auth-token`). The token is sent
-    // as a cleartext password over a TLS-required connection, exactly as the
-    // MySQL client would when negotiating the `mysql_clear_password` plugin
-    // against an RDS instance that has IAM auth enabled. Refuse to send it
-    // over an unencrypted link.
+    // AWS RDS IAM auth: `password` carries the pre-signed RDS auth token
+    // (from `aws rds generate-db-auth-token`), sent cleartext via
+    // mysql_clear_password over TLS. Refuse to send it unencrypted.
     if params.use_iam_auth.unwrap_or(false) {
         if matches!(ssl_mode, MySqlSslMode::Disabled) {
             return Err(
@@ -190,10 +173,8 @@ pub(crate) fn build_mysql_options(
                     .to_string(),
             );
         }
-        // For ad-hoc connections we have no way to recover a missing token.
-        // For saved connections (connection_id present) we allow an empty
-        // password here because the caller will inject it from the keychain
-        // *after* this builder returns.
+        // Saved connections get the token injected from the keychain after
+        // this builder returns, so an empty password is fine for them.
         if password.is_empty() && params.connection_id.is_none() {
             return Err(
                 "AWS IAM authentication is enabled but the password field is \
@@ -204,13 +185,6 @@ pub(crate) fn build_mysql_options(
         }
     }
 
-    // One-shot diagnostic so we can confirm what's reaching sqlx from the
-    // app side. Logs the user-visible ssl_mode, the user-supplied CA path,
-    // whether the path was non-empty (drives the auto-escalation), the
-    // final effective ssl_mode, and whether the cleartext plugin is being
-    // requested (only meaningful for IAM auth). All five pieces together
-    // are enough to tell from a single log line whether the connection is
-    // being constructed the way we expect.
     log::info!(
         "build_mysql_options: driver=mysql host={host} port={port} \
          ssl_mode_param={:?} ssl_ca_present={} effective_ssl_mode={:?} \
@@ -230,21 +204,14 @@ pub(crate) fn build_mysql_options(
         .timezone(timezone)
         .ssl_mode(ssl_mode);
 
-    // Skip `.password(...)` when the password is empty. Two cases:
-    //   1. Ad-hoc test connection with an empty password → sqlx will
-    //      attempt a passwordless handshake and the server will reject it,
-    //      which is the correct user-visible error.
-    //   2. Saved connection under IAM auth where the caller will inject the
-    //      RDS auth token from the keychain (or fail-fast) *after* this
-    //      builder returns. We must not stamp a stale token here, and we
-    //      must not stamp an empty string either (sqlx interprets `""` as
-    //      "user pressed Enter" and the server replies with
-    //      "Access denied for user ... (using password: YES)").
+    // Skip `.password(...)` when the password is empty: an empty string is
+    // stamped by sqlx as "user pressed Enter", which the server rejects with
+    // "Access denied (using password: YES)". Saved IAM-auth connections get
+    // the token injected from the keychain after this builder returns.
     if !password.is_empty() {
         options = options.password(password);
     }
 
-    // Apply SSL certificates if provided in params
     if let Some(ca) = &params.ssl_ca {
         options = options.ssl_ca(ca);
     }
@@ -255,11 +222,9 @@ pub(crate) fn build_mysql_options(
         options = options.ssl_client_key(key);
     }
 
-    // AWS RDS IAM authentication: the server announces
-    // `mysql_clear_password` as the auth plugin and rejects the handshake
-    // with "mysql_cleartext_plugin disabled" unless the client opts in.
-    // Enabling it here is safe because the token only ever travels over the
-    // TLS link we configured above.
+    // IAM auth: the server announces `mysql_clear_password` and rejects the
+    // handshake with "mysql_cleartext_plugin disabled" unless the client
+    // opts in. Safe because the token only travels over the TLS link above.
     if params.use_iam_auth.unwrap_or(false) {
         options = options.enable_cleartext_plugin(true);
     }
@@ -303,33 +268,20 @@ pub(crate) fn build_postgres_configurations(params: &ConnectionParams) -> PgConf
 /// Build the rustls connector for the PostgreSQL pool.
 ///
 /// `rustls` (not `native-tls`) because macOS Secure Transport applies a
-/// strict `id-kp-serverAuth` EKU check to user-supplied root anchors, which
-/// rejects valid CA certs with "The extended key usage is not valid".
-///
-/// `ssl_ca` (PEM file or bundle) overrides the platform trust store. This
-/// is the path RDS users take: the macOS keychain does not trust the
-/// regional Amazon RDS root CAs, so they must supply
-/// `https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`
-/// (or a region-specific bundle) via the connection's CA Certificate field.
-///
-/// We deliberately do NOT vendor the RDS bundle in the repo: AWS rotates
-/// these CAs every 1-3 years, and shipping a stale bundle in a release
-/// silently breaks RDS users until they upgrade. Distributors who want
-/// out-of-the-box RDS support can pull a fresh bundle at packaging time
-/// (e.g. via a Dockerfile `RUN curl ...` or a build script that drops it
-/// into `src-tauri/assets/`) and point users at the resulting path.
+/// strict `id-kp-serverAuth` EKU check to user-supplied root anchors and
+/// rejects valid CA certs. `ssl_ca` overrides the platform trust store —
+/// RDS users point it at the AWS global bundle
+/// (`https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`).
+/// The bundle is intentionally not vendored: AWS rotates these CAs every
+/// 1-3 years, so distributors pull a fresh copy at packaging time.
 ///
 /// SSL modes:
 /// - `disable`: no TLS
 /// - `allow`/`prefer`: TLS without certificate verification
 /// - `require`: force TLS without certificate verification
-///   NOTE: Prior to v0.10.3, `require` validated the certificate chain.
-///   It now matches libpq behavior (TLS without validation). Users who
-///   need certificate validation should use `verify-ca` or `verify-full`.
-/// - `verify-ca`: force TLS, validate certificate chain, skip hostname check.
-///   Requires an explicit CA file — platform roots are not used to avoid
-///   macOS Secure Transport EKU incompatibilities.
-/// - `verify-full`: force TLS, validate certificate chain and hostname
+///   (prior to v0.10.3 this validated the chain; it now matches libpq).
+/// - `verify-ca`: force TLS, validate chain, skip hostname check
+/// - `verify-full`: force TLS, validate chain and hostname
 pub(crate) fn build_postgres_tls_connector(
     params: &ConnectionParams,
 ) -> Result<MakeRustlsConnect, String> {
@@ -339,8 +291,7 @@ pub(crate) fn build_postgres_tls_connector(
 
     let config = match ssl_mode {
         "disable" | "allow" | "prefer" => {
-            // No certificate verification for these modes.
-            // The PgSslMode setting handles whether TLS is attempted.
+            // No cert verification; PgSslMode below controls whether TLS is attempted.
             let verifier = Arc::new(NoCertVerifier::new());
             ClientConfig::builder()
                 .dangerous()
@@ -348,7 +299,7 @@ pub(crate) fn build_postgres_tls_connector(
                 .with_no_client_auth()
         }
         "require" => {
-            // Force TLS but skip all certificate validation.
+            // Force TLS, skip cert validation.
             let verifier = Arc::new(NoCertVerifier::new());
             ClientConfig::builder()
                 .dangerous()
@@ -356,12 +307,8 @@ pub(crate) fn build_postgres_tls_connector(
                 .with_no_client_auth()
         }
         "verify-ca" => {
-            // Validate certificate chain but skip hostname verification.
-            // Requires an explicit CA file — we deliberately do NOT fall back
-            // to platform roots because macOS Secure Transport applies strict
-            // id-kp-serverAuth EKU checks that reject valid CA certificates
-            // (e.g. the AWS RDS bundle). This matches libpq's behavior where
-            // sslmode=verify-ca expects root certs to be supplied explicitly.
+            // Validate chain, skip hostname. Requires an explicit CA file —
+            // platform roots are not used (macOS EKU check rejects them).
             let ca_path = user_ca.ok_or_else(|| {
                 "verify-ca mode requires an explicit CA file via the connection's \
                 CA Certificate field. On macOS, platform root certificates are \
