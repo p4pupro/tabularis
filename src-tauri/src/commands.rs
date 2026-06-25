@@ -4079,18 +4079,31 @@ pub async fn get_connections_with_groups<R: Runtime>(
 pub async fn create_connection_group<R: Runtime>(
     app: AppHandle<R>,
     name: String,
+    parent_id: Option<String>,
 ) -> Result<ConnectionGroup, String> {
     let path = get_config_path(&app)?;
     let mut file = persistence::load_connections_file(&path).unwrap_or_default();
 
-    // Calculate next sort_order
-    let max_order = file.groups.iter().map(|g| g.sort_order).max().unwrap_or(-1);
+    if let Some(pid) = &parent_id {
+        if !file.groups.iter().any(|g| &g.id == pid) {
+            return Err(format!("Parent group with ID {} not found", pid));
+        }
+    }
+
+    let max_order = file
+        .groups
+        .iter()
+        .filter(|g| g.parent_id == parent_id)
+        .map(|g| g.sort_order)
+        .max()
+        .unwrap_or(-1);
 
     let group = ConnectionGroup {
         id: Uuid::new_v4().to_string(),
         name,
         collapsed: false,
         sort_order: max_order + 1,
+        parent_id,
     };
 
     file.groups.push(group.clone());
@@ -4131,6 +4144,83 @@ pub async fn update_connection_group<R: Runtime>(
 
     Ok(updated)
 }
+/// Re-parent a group. Pass `Some(id)` to make it a child of that group,
+/// or `None` to make it a top-level root. Cycles are rejected.
+#[tauri::command]
+pub async fn move_group_to_parent<R: Runtime>(
+    app: AppHandle<R>,
+    id: String,
+    parent_id: Option<String>,
+) -> Result<ConnectionGroup, String> {
+    let path = get_config_path(&app)?;
+    let mut file = persistence::load_connections_file(&path)?;
+
+    if !file.groups.iter().any(|g| g.id == id) {
+        return Err(format!("Group with ID {} not found", id));
+    }
+
+    if let Some(pid) = &parent_id {
+        if pid == &id {
+            return Err("A group cannot be its own parent".to_string());
+        }
+        if !file.groups.iter().any(|g| &g.id == pid) {
+            return Err(format!("Parent group with ID {} not found", pid));
+        }
+    }
+
+    reject_if_would_create_cycle(&file.groups, &id, parent_id.as_deref())?;
+
+    let group = file
+        .groups
+        .iter_mut()
+        .find(|g| g.id == id)
+        .expect("group existence checked above");
+    group.parent_id = parent_id;
+    let updated = group.clone();
+
+    save_connections_and_invalidate(&app, &path, &file)?;
+    Ok(updated)
+}
+
+/// Reject re-parenting that would create a cycle: `target` must not be a
+/// descendant of `group_id`. Walks up from `target` looking for `group_id`.
+/// Bounded by `groups.len()` to fail-safe against pre-existing data cycles.
+pub(crate) fn reject_if_would_create_cycle(
+    groups: &[ConnectionGroup],
+    group_id: &str,
+    new_parent_id: Option<&str>,
+) -> Result<(), String> {
+    let Some(target) = new_parent_id else {
+        return Ok(());
+    };
+    let mut current = Some(target.to_string());
+    let mut visited = std::collections::HashSet::new();
+    let max_steps = groups.len() + 1;
+    for _ in 0..max_steps {
+        match current {
+            Some(node) if node == group_id => {
+                return Err(
+                    "Cannot move a group into one of its own descendants (would create a cycle)"
+                        .to_string(),
+                );
+            }
+            Some(node) => {
+                if !visited.insert(node.clone()) {
+                    return Err(
+                        "Connection-group tree contains a pre-existing cycle; refusing to modify it"
+                            .to_string(),
+                    );
+                }
+                current = groups
+                    .iter()
+                    .find(|g| g.id == node)
+                    .and_then(|g| g.parent_id.clone());
+            }
+            None => return Ok(()),
+        }
+    }
+    Err("Connection-group tree is deeper than the number of groups; refusing to modify it".to_string())
+}
 
 #[tauri::command]
 pub async fn delete_connection_group<R: Runtime>(
@@ -4140,14 +4230,29 @@ pub async fn delete_connection_group<R: Runtime>(
     let path = get_config_path(&app)?;
     let mut file = persistence::load_connections_file(&path)?;
 
-    // Remove connections from the group (set group_id to None)
+    // Capture the deleted group's parent up-front so we can re-parent any
+    // direct child groups to the deleted group's parent. This is the standard
+    // "promote children to grandparent" behaviour from file-explorer UIs and
+    // matches what users expect when deleting a folder in Finder/Explorer.
+    let deleted_parent = file
+        .groups
+        .iter()
+        .find(|g| g.id == id)
+        .map(|g| g.parent_id.clone())
+        .ok_or_else(|| format!("Group with ID {} not found", id))?;
+
+    for g in &mut file.groups {
+        if g.parent_id.as_ref() == Some(&id) {
+            g.parent_id = deleted_parent.clone();
+        }
+    }
+
     for conn in &mut file.connections {
         if conn.group_id.as_ref() == Some(&id) {
             conn.group_id = None;
         }
     }
 
-    // Remove the group
     file.groups.retain(|g| g.id != id);
     save_connections_and_invalidate(&app, &path, &file)?;
 

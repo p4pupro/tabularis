@@ -202,6 +202,10 @@ pub struct ConnectionGroup {
     pub collapsed: bool,
     #[serde(default)]
     pub sort_order: i32,
+    /// `Some(group_id)` makes this group a child of that group; `None` is a
+    /// top-level root. Cycles are rejected by the backend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
