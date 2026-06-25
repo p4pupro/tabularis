@@ -48,6 +48,7 @@ export const Connections = () => {
     connectionGroups,
     createGroup,
     updateGroup,
+    moveGroupToParent,
     deleteGroup,
     moveConnectionToGroup,
     reorderGroups,
@@ -158,6 +159,25 @@ export const Connections = () => {
     [connectionGroups],
   );
 
+  // Build a parentId -> children map for nested-group rendering. Groups
+  // without a `parent_id` (or with `parent_id === null`) are top-level.
+  // The map is built per-render from the flat `connectionGroups` list so
+  // any change in the data (rename, re-parent, delete) flows through.
+  const groupsByParent = useMemo(() => {
+    const map = new Map<string | null, typeof connectionGroups>();
+    for (const g of connectionGroups) {
+      const key = g.parent_id ?? null;
+      const arr = map.get(key) ?? [];
+      arr.push(g);
+      map.set(key, arr);
+    }
+    // Keep each child list sorted by sort_order for deterministic rendering.
+    for (const [, arr] of map) {
+      arr.sort((a, b) => a.sort_order - b.sort_order);
+    }
+    return map;
+  }, [connectionGroups]);
+
   // Organize connections by group
   const { groupedConnections, ungroupedConnections } = useMemo(() => {
     const grouped: Record<string, SavedConnection[]> = {};
@@ -186,15 +206,37 @@ export const Connections = () => {
   }, [connections]);
 
   // Group management functions
-  const handleCreateGroup = async () => {
+  const handleCreateGroup = async (parentId?: string | null) => {
     if (!newGroupName.trim()) return;
     try {
-      await createGroup(newGroupName.trim());
+      await createGroup(newGroupName.trim(), parentId ?? null);
       setNewGroupName("");
       setIsCreatingGroup(false);
       await loadConnections();
     } catch (e) {
       console.error("Failed to create group:", e);
+      setError(t("groups.createError"));
+    }
+  };
+
+  // Inline subfolder creator: prompts for a name and creates a subgroup
+  // under the given parent. Used by the "New subfolder" entry in the
+  // group context menu.
+  const handleCreateSubgroup = async (parentGroupId: string) => {
+    const name = window.prompt(
+      t("groups.subgroupNamePrompt", { defaultValue: "Subfolder name" }),
+    );
+    if (!name || !name.trim()) return;
+    try {
+      const previousName = newGroupName;
+      setNewGroupName(name.trim());
+      // Reuse handleCreateGroup by temporarily setting the new-group-name
+      // and calling it. This keeps the success/error path in one place.
+      await createGroup(name.trim(), parentGroupId);
+      setNewGroupName(previousName);
+      await loadConnections();
+    } catch (e) {
+      console.error("Failed to create subgroup:", e);
       setError(t("groups.createError"));
     }
   };
@@ -489,6 +531,65 @@ export const Connections = () => {
       setDraggingGroupId(null);
       setDragOverGroupId(null);
       if (!targetGroupId || targetGroupId === sourceGroupId) return;
+
+      // Decide between two actions based on horizontal offset:
+      //   - If the cursor is over the right half of the target group
+      //     (i.e. cursor X is past the target's horizontal midpoint +
+      //     the source's indent), the user is dropping INTO it as a
+      //     child. Backend's cycle check prevents descendant-loops.
+      //   - Otherwise, fall back to top-level reorder, preserving
+      //     existing behavior for users who just want to re-order
+      //     groups at the same level.
+      const targetEl = document.querySelector(
+        `[data-group-id="${targetGroupId}"]`,
+      ) as HTMLElement | null;
+      const sourceDepthAttr =
+        document
+          .querySelector(`[data-group-id="${sourceGroupId}"]`)
+          ?.getAttribute("data-group-depth") ?? "0";
+      const sourceDepth = Number.parseInt(sourceDepthAttr, 10) || 0;
+      let reparent = false;
+      if (targetEl) {
+        const rect = targetEl.getBoundingClientRect();
+        const indentStep = 16; // matches `Math.min(depth, 6) * 16`
+        // Drop-in is allowed only when the cursor lands to the right of
+        // the target's left edge plus one indent step. This avoids
+        // accidental re-parenting when the user is just re-ordering at
+        // the same depth and crosses the target's header horizontally.
+        reparent = ev.clientX > rect.left + indentStep;
+      }
+
+      if (reparent) {
+        // Prevent dropping a parent into its own descendant by walking
+        // the source's ancestor chain (cheap O(depth) check; the
+        // backend will still reject malformed drops).
+        const isAncestor = (maybeAncestorId: string): boolean => {
+          let cur = connectionGroups.find((g) => g.id === targetGroupId);
+          while (cur) {
+            if (cur.id === sourceGroupId) return true;
+            cur = connectionGroups.find((g) => g.id === cur!.parent_id);
+          }
+          return false;
+        };
+        if (sourceDepth > 0 || isAncestor(targetGroupId)) {
+          // The target is already a descendant of the source. Refuse
+          // silently in the UI; the backend would have rejected this
+          // anyway.
+          setError(
+            t("groups.cannotMoveIntoDescendant", {
+              defaultValue: "Cannot move a group into one of its own subfolders",
+            }),
+          );
+          return;
+        }
+        void moveGroupToParent(sourceGroupId, targetGroupId).catch((err) => {
+          console.error("Failed to move group:", err);
+          setError(String(err));
+        });
+        return;
+      }
+
+      // Same-depth reorder
       const newOrder = [...sortedGroups];
       const fromIdx = newOrder.findIndex((g) => g.id === sourceGroupId);
       const toIdx = newOrder.findIndex((g) => g.id === targetGroupId);
@@ -517,6 +618,116 @@ export const Connections = () => {
     onGripMouseDown: (e: React.MouseEvent) => handleGripMouseDown(e, group.id),
     isDragOver: dragOverGroupId === group.id && draggingGroupId !== group.id,
   });
+
+  // Recursive group tree renderer. Walks `groupsByParent` starting at
+  // `parentId` (null = root) and produces the nested JSX. Children are
+  // indented by `depth * 16px`, capped at 6 levels to avoid runaway
+  // visual indent on deep trees. Collapsed groups hide both their
+  // connections AND their sub-groups, matching sidebar behavior.
+  const renderGroupTree = (
+    parentId: string | null,
+    mode: "grid" | "list",
+    depth: number = 0,
+  ): React.ReactNode => {
+    const children = groupsByParent.get(parentId) ?? [];
+    if (children.length === 0) return null;
+    return children.map((group) => {
+      const groupConns = filteredGroupedConnections[group.id] || [];
+      const isCollapsed = collapsedGroups.has(group.id);
+      // Skip rendering groups that have no connections (direct or
+      // descendant) when searching, to keep results relevant.
+      if (search.trim() && !hasAnyMatchingDescendant(group.id, search)) {
+        return null;
+      }
+      const indentPx = Math.min(depth, 6) * 16;
+      // Header shows the total of this group + all descendant groups
+      // so users can see at a glance that a folder contains things
+      // even when they live in sub-folders.
+      const connCount = countDescendantConnections(group.id);
+      return (
+        <div
+          key={group.id}
+          data-group-id={group.id}
+          data-group-depth={depth}
+          className={mode === "grid" ? "space-y-3" : "space-y-2"}
+        >
+          <GroupHeader
+            {...groupHeaderProps(group)}
+            connCount={connCount}
+          />
+          {!isCollapsed && (
+            <div
+              className={
+                mode === "grid"
+                  ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"
+                  : "flex flex-col gap-1.5"
+              }
+              style={{ paddingLeft: 24 + indentPx }}
+            >
+              {groupConns.map((conn) =>
+                mode === "grid" ? (
+                  <ConnectionCard key={conn.id} {...connCardProps(conn)} />
+                ) : (
+                  <ConnectionListItem
+                    key={conn.id}
+                    {...connCardProps(conn)}
+                  />
+                ),
+              )}
+            </div>
+          )}
+          {/* Recurse into subgroups (also hidden when this group is collapsed) */}
+          {!isCollapsed && renderGroupTree(group.id, mode, depth + 1)}
+        </div>
+      );
+    });
+  };
+
+  // Helper used by `renderGroupTree` to decide whether a group has any
+  // visible descendant under an active search filter. Returns true if
+  // the group itself has at least one matching connection OR if any of
+  // its descendant groups does. Walks the `groupsByParent` map.
+  const hasAnyMatchingDescendant = (
+    rootGroupId: string,
+    query: string,
+  ): boolean => {
+    const lc = query.toLowerCase();
+    const stack: string[] = [rootGroupId];
+    const visited = new Set<string>();
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      if (visited.has(id)) continue;
+      visited.add(id);
+      // Check direct connections of this group
+      const conns = filteredGroupedConnections[id] || [];
+      if (conns.length > 0) return true;
+      // Check name itself (in case the group is what user searched)
+      const g = connectionGroups.find((x) => x.id === id);
+      if (g && g.name.toLowerCase().includes(lc)) return true;
+      // Descend
+      const kids = groupsByParent.get(id) ?? [];
+      for (const kid of kids) stack.push(kid.id);
+    }
+    return false;
+  };
+
+  // Counts connections across this group and all its descendants.
+  // Used for the "(N)" badge on group headers so a folder that holds
+  // only sub-folders with connections still reports a non-zero count.
+  const countDescendantConnections = (groupId: string): number => {
+    let total = 0;
+    const stack: string[] = [groupId];
+    const visited = new Set<string>();
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      if (visited.has(id)) continue;
+      visited.add(id);
+      total += (filteredGroupedConnections[id] || []).length;
+      const kids = groupsByParent.get(id) ?? [];
+      for (const kid of kids) stack.push(kid.id);
+    }
+    return total;
+  };
 
   return (
     <div className="h-full flex flex-col overflow-hidden bg-base">
@@ -747,32 +958,7 @@ export const Connections = () => {
             {/* ── Grid view ─────────────────────────────────────────────── */}
             {viewMode === "grid" ? (
               <div className="space-y-6">
-                {sortedGroups.map((group) => {
-                  const groupConns = filteredGroupedConnections[group.id] || [];
-                  if (groupConns.length === 0 && search.trim()) return null;
-                  return (
-                    <div
-                      key={group.id}
-                      data-group-id={group.id}
-                      className="space-y-3"
-                    >
-                      <GroupHeader
-                        {...groupHeaderProps(group)}
-                        connCount={groupConns.length}
-                      />
-                      {!collapsedGroups.has(group.id) && (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pl-6">
-                          {groupConns.map((conn) => (
-                            <ConnectionCard
-                              key={conn.id}
-                              {...connCardProps(conn)}
-                            />
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                {renderGroupTree(null, "grid")}
 
                 {filteredUngroupedConnections.length > 0 && (
                   <div className="space-y-3">
@@ -813,32 +999,7 @@ export const Connections = () => {
             ) : (
               /* ── List view ──────────────────────────────────────────────── */
               <div className="space-y-6">
-                {sortedGroups.map((group) => {
-                  const groupConns = filteredGroupedConnections[group.id] || [];
-                  if (groupConns.length === 0 && search.trim()) return null;
-                  return (
-                    <div
-                      key={group.id}
-                      data-group-id={group.id}
-                      className="space-y-2"
-                    >
-                      <GroupHeader
-                        {...groupHeaderProps(group)}
-                        connCount={groupConns.length}
-                      />
-                      {!collapsedGroups.has(group.id) && (
-                        <div className="flex flex-col gap-1.5 pl-6">
-                          {groupConns.map((conn) => (
-                            <ConnectionListItem
-                              key={conn.id}
-                              {...connCardProps(conn)}
-                            />
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                {renderGroupTree(null, "list")}
 
                 {filteredUngroupedConnections.length > 0 && (
                   <div className="space-y-2">
@@ -910,6 +1071,14 @@ export const Connections = () => {
           x={groupContextMenu.x}
           y={groupContextMenu.y}
           items={[
+            {
+              label: t("groups.newSubfolder", { defaultValue: "New subfolder" }),
+              icon: FolderPlus,
+              action: () => {
+                void handleCreateSubgroup(groupContextMenu.groupId);
+              },
+            },
+            { separator: true as const },
             {
               label: t("groups.rename"),
               icon: Edit,

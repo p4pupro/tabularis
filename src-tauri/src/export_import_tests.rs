@@ -11,6 +11,7 @@ mod tests {
                 name: "Test Group".to_string(),
                 collapsed: false,
                 sort_order: 0,
+                parent_id: None,
             }],
             connections: vec![SavedConnection {
                 id: "conn1".to_string(),

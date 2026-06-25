@@ -819,8 +819,19 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   // Connection Group methods
-  const createGroup = useCallback(async (name: string): Promise<ConnectionGroup> => {
-    const group = await invoke<ConnectionGroup>('create_connection_group', { name });
+  const createGroup = useCallback(async (
+    name: string,
+    parentId?: string | null
+  ): Promise<ConnectionGroup> => {
+    // The Tauri command expects `parent_id: Option<String>`. Passing
+    // `null` directly is fine — Tauri serialises it as `null` in JSON
+    // and the Rust deserializer maps it to `None`. Passing `undefined`
+    // would also work because serde's default attribute treats it the
+    // same, but we normalise to `null` for explicitness.
+    const group = await invoke<ConnectionGroup>('create_connection_group', {
+      name,
+      parentId: parentId ?? null,
+    });
     setConnectionGroups(prev => [...prev, group]);
     return group;
   }, []);
@@ -835,14 +846,36 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     );
   }, []);
 
+  const moveGroupToParent = useCallback(async (
+    id: string,
+    parentId: string | null
+  ): Promise<void> => {
+    await invoke('move_group_to_parent', { id, parentId });
+    setConnectionGroups(prev =>
+      prev.map(g => (g.id === id ? { ...g, parent_id: parentId } : g))
+    );
+  }, []);
+
   const deleteGroup = useCallback(async (id: string): Promise<void> => {
     await invoke('delete_connection_group', { id });
-    setConnectionGroups(prev => prev.filter(g => g.id !== id));
-    // Update connections that were in this group
+    // Direct children are re-parented to the deleted group's parent by
+    // the backend. Reflect that in the optimistic state update so the UI
+    // doesn't briefly show them in limbo.
+    const deleted = connectionGroups.find(g => g.id === id);
+    const newParent = deleted?.parent_id ?? null;
+    setConnectionGroups(prev =>
+      prev
+        .filter(g => g.id !== id)
+        .map(g =>
+          g.parent_id === id ? { ...g, parent_id: newParent } : g
+        )
+    );
+    // Connections in the deleted group become ungrouped (backend sets
+    // their group_id to None).
     setConnections(prev =>
       prev.map(c => (c.group_id === id ? { ...c, group_id: undefined } : c))
     );
-  }, []);
+  }, [connectionGroups]);
 
   const moveConnectionToGroup = useCallback(async (
     connectionId: string,
@@ -935,6 +968,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       isConnectionOpen,
       createGroup,
       updateGroup,
+      moveGroupToParent,
       deleteGroup,
       moveConnectionToGroup,
       reorderGroups,
