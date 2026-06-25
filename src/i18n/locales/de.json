@@ -1390,7 +1390,8 @@
     "createFirst": "Erstelle deine erste Gruppe, um Verbindungen zu organisieren",
     "groupName": "Gruppenname",
     "dragHint": "Verbindungen hierher ziehen",
-    "createError": "Erstellen der Gruppe fehlgeschlagen"
+    "createError": "Erstellen der Gruppe fehlgeschlagen",
+    "subgroupNamePrompt": "Subfolder name (use / for nested levels)"
   },
   "queryModal": {
     "database": "Datenbank",

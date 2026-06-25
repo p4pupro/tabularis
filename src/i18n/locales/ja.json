@@ -1409,7 +1409,8 @@
     "createFirst": "最初のグループを作成して接続を整理しましょう",
     "groupName": "グループ名",
     "dragHint": "接続をここにドラッグ",
-    "createError": "グループの作成に失敗しました"
+    "createError": "グループの作成に失敗しました",
+    "subgroupNamePrompt": "Subfolder name (use / for nested levels)"
   },
   "queryModal": {
     "database": "データベース",

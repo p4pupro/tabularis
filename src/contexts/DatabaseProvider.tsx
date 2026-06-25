@@ -836,6 +836,21 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     return group;
   }, []);
 
+  const createGroupPath = useCallback(async (
+    path: string,
+    parentId?: string | null
+  ): Promise<ConnectionGroup> => {
+    const group = await invoke<ConnectionGroup>('create_group_path', {
+      path,
+      parentId: parentId ?? null,
+    });
+    // Re-fetch the full group list because the backend may have reused
+    // existing segments and created new ones we don't yet know about.
+    const fresh = await invoke<ConnectionGroup[]>('get_connection_groups');
+    setConnectionGroups(fresh);
+    return group;
+  }, []);
+
   const updateGroup = useCallback(async (
     id: string,
     updates: { name?: string; collapsed?: boolean; sort_order?: number }
@@ -967,6 +982,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       getConnectionData,
       isConnectionOpen,
       createGroup,
+      createGroupPath,
       updateGroup,
       moveGroupToParent,
       deleteGroup,
