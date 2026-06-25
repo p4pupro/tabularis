@@ -8,7 +8,7 @@
 
 export const LINKS = {
   DISCORD: "https://discord.com/invite/K2hmhfHRSt",
-  GITHUB: "https://github.com/TabularisDB/tabularis",
+  GITHUB: "https://github.com/p4pupro/tabularis",
   X: "https://x.com/tabularisdb",
   BLUESKY: "https://bsky.app/profile/tabularis.bsky.social",
   MASTODON: "https://mastodon.social/@tabularis",

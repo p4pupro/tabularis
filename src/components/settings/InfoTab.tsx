@@ -79,7 +79,7 @@ export function InfoTab() {
 
         <div className="flex justify-center gap-4 flex-wrap">
           <button
-            onClick={() => openUrl("https://github.com/TabularisDB/tabularis")}
+            onClick={() => openUrl("https://github.com/p4pupro/tabularis")}
             className="flex items-center gap-2 bg-surface-secondary hover:bg-surface-tertiary text-primary px-4 py-2 rounded-lg font-medium transition-colors border border-strong"
           >
             <Github size={18} />
@@ -300,10 +300,10 @@ export function InfoTab() {
       >
         <div className="pt-3 flex flex-col items-center text-center">
           <button
-            onClick={() => openUrl("https://github.com/TabularisDB/tabularis")}
+            onClick={() => openUrl("https://github.com/p4pupro/tabularis")}
             className="text-blue-400 hover:text-blue-300 font-medium text-sm hover:underline"
           >
-            github.com/TabularisDB/tabularis
+            github.com/p4pupro/tabularis
           </button>
         </div>
       </SettingSection>
