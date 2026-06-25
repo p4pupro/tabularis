@@ -63,8 +63,7 @@ interface ConnectionParams {
   // MySQL: force PIPES_AS_CONCAT / NO_ENGINE_SUBSTITUTION sql_mode on connect.
   // Defaults to true; disable for Vitess/PlanetScale which reject altering sql_mode.
   pipes_as_concat?: boolean;
-  // AWS RDS IAM authentication (mysql only): when true, the password field
-  // holds a pre-signed RDS auth token instead of a real password.
+  // When true, the password field is an RDS auth token (mysql only).
   use_iam_auth?: boolean;
   // SSH
   ssh_enabled?: boolean;
@@ -1560,7 +1559,6 @@ export const NewConnectionModal = ({
             </div>
           </div>
 
-          {/* AWS RDS IAM authentication (mysql only) */}
           {driver === "mysql" && (
             <div className="pt-2 border-t border-strong/50">
               <label className="flex items-start gap-2 cursor-pointer">

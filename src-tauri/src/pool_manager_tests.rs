@@ -274,9 +274,8 @@ mod tests {
 
     #[test]
     fn mysql_options_iam_auth_allows_empty_password_when_connection_id_set() {
-        // For saved connections, the password will be injected from the
-        // keychain after this builder returns, so an empty password here is
-        // not an error.
+        // Saved connections get the password injected from the keychain after
+        // the builder returns, so an empty password here is fine.
         let mut params = mysql_params("required");
         params.use_iam_auth = Some(true);
         params.password = Some(String::new());
@@ -294,17 +293,9 @@ mod tests {
         params.password = Some("fake-rds-token".to_string());
 
         let opts = build_mysql_options(&params, None).expect("must build");
-        // sqlx 0.8.6 doesn't expose a public password getter; assert on the
-        // observable side effects: SSL mode is required, no error returned.
         assert!(matches!(opts.get_ssl_mode(), MySqlSslMode::Required));
-        // The cleartext plugin must be opted in, otherwise the RDS server
-        // rejects IAM auth with "mysql_cleartext_plugin disabled". sqlx 0.8.6
-        // does not expose `enable_cleartext_plugin` as a public getter, but
-        // it IS included in the derived `Debug` output of
-        // `MySqlConnectOptions`, so we can assert on it as a regression
-        // sentinel. If a future refactor drops the
-        // `options.enable_cleartext_plugin(true)` call, this assertion will
-        // start failing and the test will catch it before the change ships.
+        // sqlx 0.8.6 has no public getter for `enable_cleartext_plugin`, so
+        // assert on the `Debug` output as a regression sentinel.
         let debug = format!("{:?}", opts);
         assert!(
             debug.contains("enable_cleartext_plugin: true"),

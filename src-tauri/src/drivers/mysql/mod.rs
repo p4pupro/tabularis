@@ -1442,16 +1442,9 @@ impl DatabaseDriver for MysqlDriver {
             .map_err(|e| e.to_string())
     }
 
-    /// Tests connectivity by acquiring a connection from the shared pool.
-    ///
-    /// The trait default builds a fresh `AnyConnection` from
-    /// `build_connection_url`, which constructs the connection options
-    /// straight from a URL — that path cannot opt in to
-    /// `enable_cleartext_plugin(true)` (the switch AWS RDS IAM
-    /// authentication needs to negotiate `mysql_clear_password` with the
-    /// server). Pool connections go through `build_mysql_options` and
-    /// therefore carry the right flags. Routing the test through the pool
-    /// is the only way to get the same configuration as a real session.
+    /// Tests connectivity via the shared pool. The trait default builds a
+    /// fresh `AnyConnection` from a URL, which can't opt in to
+    /// `enable_cleartext_plugin` — required for RDS IAM auth.
     async fn test_connection(
         &self,
         params: &crate::models::ConnectionParams,

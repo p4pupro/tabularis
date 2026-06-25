@@ -410,18 +410,10 @@ pub fn find_connection_by_id<R: Runtime>(
         }
     };
 
-    // Load passwords from keychain if needed, via the in-memory cache.
-    // On a warm cache hit this is a HashMap lookup (nanoseconds); on a cold miss
-    // it calls keychain once and caches the result for all subsequent reads.
-    //
-    // AWS RDS IAM auth tokens are short-lived (15 min) and must come from the
-    // `password` field on every connect, never from the keychain. If a stale
-    // token is sitting in the keychain (e.g. saved by an older release) and
-    // the user opens the edit modal, we don't want to surface that token in
-    // the password field — the user would believe it's fresh and the next
-    // connect would fail with "Access denied". Force the password to `None`
-    // for IAM-auth connections so the modal renders an empty password field
-    // and prompts the user to paste a fresh token.
+    // Load passwords from keychain via the in-memory cache (warm hit = lookup,
+    // cold miss = keychain call + cache). Skip IAM-auth connections: their
+    // 15-min tokens must come from the `password` field, never the keychain,
+    // so a stale token from an older release can't be surfaced in the modal.
     if conn.params.save_in_keychain.unwrap_or(false)
         && !conn.params.use_iam_auth.unwrap_or(false)
     {
@@ -857,10 +849,8 @@ pub async fn duplicate_connection<R: Runtime>(
 
     let cache = app.state::<std::sync::Arc<crate::credential_cache::CredentialCache>>();
 
-    // Recover passwords if in keychain (via cache for fast repeat access).
     // Same IAM-auth guard as `find_connection_by_id`: never copy a stale RDS
-    // auth token into a duplicated connection — the duplicate would be
-    // broken from the moment it's created.
+    // auth token into a duplicated connection.
     if original.params.save_in_keychain.unwrap_or(false)
         && !original.params.use_iam_auth.unwrap_or(false)
     {
@@ -1745,14 +1735,11 @@ pub async fn test_connection<R: Runtime>(
     // keychain fallback so a stale token can't be reused.
     let iam_auth = expanded_params.use_iam_auth.unwrap_or(false);
 
-    // Fail-fast with an actionable message if IAM is enabled but no token
-    // was supplied. Without this guard, `build_mysql_options` produces a
-    // connect-options struct with an empty password (the `connection_id.is_some()`
-    // branch in `build_mysql_options` deliberately allows that for caller-side
-    // injection), the server replies with the opaque "1045 Access denied
-    // for user '...' (using password: YES)", and the user has no idea whether
-    // the token is wrong, expired, or simply missing. The error below tells
-    // them exactly what to do.
+    // IAM auth needs an RDS auth token right now. Without this guard the
+    // builder accepts an empty password (saved connections inject later),
+    // the server replies with the opaque "Access denied (using password:
+    // YES)", and the user can't tell whether the token is missing, wrong,
+    // or expired.
     if iam_auth
         && request.params.password.as_deref().unwrap_or("").is_empty()
         && expanded_params.password.as_deref().unwrap_or("").is_empty()
@@ -2641,16 +2628,11 @@ pub async fn list_databases<R: Runtime>(
     let mut expanded_params = expand_ssh_connection_params(&app, &request.params).await?;
     expanded_params = expand_k8s_connection_params(&app, &expanded_params).await?;
 
-    // AWS RDS IAM auth tokens are short-lived (15 min) and must come from the
-    // password field on every test/connect, never from the keychain. Skip the
-    // keychain fallback so a stale token can't be reused.
     let iam_auth = expanded_params.use_iam_auth.unwrap_or(false);
 
-    // Fail-fast with an actionable message if IAM is enabled but no token
-    // was supplied. Without this guard, the list_databases call would try
-    // to build a pool with an empty password and the server would reply
-    // with the opaque "1045 Access denied" — confusing for the user. The
-    // error below tells them exactly what to do.
+    // IAM auth needs an RDS auth token right now; skip the keychain fallback
+    // so a stale token can't be reused, and fail fast with an actionable
+    // message if none was supplied.
     if iam_auth
         && request.params.password.as_deref().unwrap_or("").is_empty()
         && expanded_params.password.as_deref().unwrap_or("").is_empty()
