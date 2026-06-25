@@ -222,12 +222,8 @@ pub struct ConnectionGroup {
     pub collapsed: bool,
     #[serde(default)]
     pub sort_order: i32,
-    /// When `Some(id)`, this group is a child of the group with the given id.
-    /// `None` means the group is a top-level root. Cycles are not allowed:
-    /// the backend rejects any `parent_id` that would make this group (or
-    /// any of its ancestors) appear in its own ancestry chain. The default
-    /// of `None` keeps the field backwards-compatible with `connections.json`
-    /// files written before nested groups were introduced.
+    /// `Some(group_id)` makes this group a child of that group; `None` is a
+    /// top-level root. Cycles are rejected by the backend.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
 }
