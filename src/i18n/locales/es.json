@@ -709,7 +709,10 @@
     "selectK8sConnection": "Selecciona conexión de K8s",
     "selectTypeFirst": "Selecciona primero contexto/namespace/tipo",
     "useK8s": "Usar Port-Forward de Kubernetes",
-    "useK8sConnection": "Conexión guardada"
+    "useK8sConnection": "Conexión guardada",
+    "useIamAuth": "Usar autenticación AWS IAM (RDS)",
+    "useIamAuthHint": "El campo de contraseña se interpreta como un token de autenticación de RDS (obtenido con `aws rds generate-db-auth-token`). Requiere TLS. Los tokens caducan cada 15 minutos.",
+    "useIamAuthTlsRequired": "Activa un modo SSL arriba para usar la autenticación AWS IAM."
   },
   "sshConnections": {
     "title": "Conexiones SSH",

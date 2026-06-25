@@ -240,8 +240,17 @@ async fn resolve_db_params(
 ) -> Result<(crate::models::SavedConnection, ConnectionParams), JsonRpcError> {
     let mut conn = find_connection(conn_id)?;
 
-    // Load DB password from keychain if it isn't stored inline
-    if conn.params.save_in_keychain.unwrap_or(false) {
+    // Load DB password from keychain if it isn't stored inline.
+    //
+    // AWS RDS IAM auth tokens are short-lived (15 min) and MUST come from the
+    // `password` field on every connect, never from the keychain. If the user
+    // previously saved a token to the keychain (e.g. before this guard was
+    // added), reading it back here would silently reuse a stale token and the
+    // server would reject the handshake with "Access denied". Skip the
+    // keychain fallback for IAM-auth connections so the caller is forced to
+    // supply a fresh token.
+    let iam_auth = conn.params.use_iam_auth.unwrap_or(false);
+    if !iam_auth && conn.params.save_in_keychain.unwrap_or(false) {
         let cache = std::sync::Arc::new(credential_cache::CredentialCache::default());
         let id = conn.id.clone();
         let pwd = tokio::task::spawn_blocking(move || {
@@ -259,6 +268,13 @@ async fn resolve_db_params(
                 conn.params.password = Some(p);
             }
         }
+    } else if iam_auth && conn.params.save_in_keychain.unwrap_or(false) {
+        log::warn!(
+            "MCP: connection {} has use_iam_auth=true; ignoring any password stored in the keychain. A fresh RDS auth token must be supplied on every connect.",
+            conn_id
+        );
+        // Make sure no stale token leaks into the resolved params.
+        conn.params.password = None;
     }
 
     let expanded = expand_ssh_params_for_mcp(&conn.params).await?;

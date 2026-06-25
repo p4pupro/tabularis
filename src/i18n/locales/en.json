@@ -738,7 +738,10 @@
     "selectK8sConnection": "Select K8s Connection",
     "selectTypeFirst": "Select context/namespace/type first",
     "useK8s": "Use Kubernetes Port-Forward",
-    "useK8sConnection": "Saved Connection"
+    "useK8sConnection": "Saved Connection",
+    "useIamAuth": "Use AWS IAM Authentication (RDS)",
+    "useIamAuthHint": "The password field is treated as an RDS auth token (from `aws rds generate-db-auth-token`). Requires TLS. Tokens expire every 15 minutes.",
+    "useIamAuthTlsRequired": "Enable an SSL mode above to use AWS IAM authentication."
   },
   "sshConnections": {
     "title": "SSH Connections",

@@ -411,7 +411,18 @@ pub fn find_connection_by_id<R: Runtime>(
     // Load passwords from keychain if needed, via the in-memory cache.
     // On a warm cache hit this is a HashMap lookup (nanoseconds); on a cold miss
     // it calls keychain once and caches the result for all subsequent reads.
-    if conn.params.save_in_keychain.unwrap_or(false) {
+    //
+    // AWS RDS IAM auth tokens are short-lived (15 min) and must come from the
+    // `password` field on every connect, never from the keychain. If a stale
+    // token is sitting in the keychain (e.g. saved by an older release) and
+    // the user opens the edit modal, we don't want to surface that token in
+    // the password field — the user would believe it's fresh and the next
+    // connect would fail with "Access denied". Force the password to `None`
+    // for IAM-auth connections so the modal renders an empty password field
+    // and prompts the user to paste a fresh token.
+    if conn.params.save_in_keychain.unwrap_or(false)
+        && !conn.params.use_iam_auth.unwrap_or(false)
+    {
         let cache = app.state::<std::sync::Arc<crate::credential_cache::CredentialCache>>();
         match credential_cache::get_db_password_cached(&cache, &conn.id) {
             Ok(pwd) => conn.params.password = Some(pwd),
@@ -844,8 +855,13 @@ pub async fn duplicate_connection<R: Runtime>(
 
     let cache = app.state::<std::sync::Arc<crate::credential_cache::CredentialCache>>();
 
-    // Recover passwords if in keychain (via cache for fast repeat access)
-    if original.params.save_in_keychain.unwrap_or(false) {
+    // Recover passwords if in keychain (via cache for fast repeat access).
+    // Same IAM-auth guard as `find_connection_by_id`: never copy a stale RDS
+    // auth token into a duplicated connection — the duplicate would be
+    // broken from the moment it's created.
+    if original.params.save_in_keychain.unwrap_or(false)
+        && !original.params.use_iam_auth.unwrap_or(false)
+    {
         if let Ok(pwd) = credential_cache::get_db_password_cached(&cache, &original.id) {
             original.params.password = Some(pwd);
         }
@@ -1718,7 +1734,32 @@ pub async fn test_connection<R: Runtime>(
     let mut expanded_params = expand_ssh_connection_params(&app, &request.params).await?;
     expanded_params = expand_k8s_connection_params(&app, &expanded_params).await?;
 
-    if request.params.password.is_none() && expanded_params.password.is_none() {
+    // AWS RDS IAM auth tokens are short-lived (15 min) and must come from the
+    // password field on every test/connect, never from the keychain. Skip the
+    // keychain fallback so a stale token can't be reused.
+    let iam_auth = expanded_params.use_iam_auth.unwrap_or(false);
+
+    // Fail-fast with an actionable message if IAM is enabled but no token
+    // was supplied. Without this guard, `build_mysql_options` produces a
+    // connect-options struct with an empty password (the `connection_id.is_some()`
+    // branch in `build_mysql_options` deliberately allows that for caller-side
+    // injection), the server replies with the opaque "1045 Access denied
+    // for user '...' (using password: YES)", and the user has no idea whether
+    // the token is wrong, expired, or simply missing. The error below tells
+    // them exactly what to do.
+    if iam_auth
+        && request.params.password.as_deref().unwrap_or("").is_empty()
+        && expanded_params.password.as_deref().unwrap_or("").is_empty()
+    {
+        return Err(
+            "AWS IAM authentication is enabled but the password field is empty. \
+             Paste the output of `aws rds generate-db-auth-token` into the \
+             password field and try again. Tokens expire every 15 minutes."
+                .to_string(),
+        );
+    }
+
+    if !iam_auth && request.params.password.is_none() && expanded_params.password.is_none() {
         let saved_conn = match &request.connection_id {
             Some(id) => find_connection_by_id(&app, id).ok(),
             None => None,
@@ -1753,7 +1794,13 @@ pub async fn test_connection<R: Runtime>(
         }
     }
 
-    drv.test_connection(&resolved_params).await?;
+    drv.test_connection(&resolved_params).await.map_err(|e| {
+        log::warn!(
+            "Connection test failed for database {}: {e}",
+            request.params.database
+        );
+        e
+    })?;
 
     log::info!(
         "Connection test successful for database: {}",
@@ -2587,7 +2634,29 @@ pub async fn list_databases<R: Runtime>(
     let mut expanded_params = expand_ssh_connection_params(&app, &request.params).await?;
     expanded_params = expand_k8s_connection_params(&app, &expanded_params).await?;
 
-    if request.params.password.is_none() && expanded_params.password.is_none() {
+    // AWS RDS IAM auth tokens are short-lived (15 min) and must come from the
+    // password field on every test/connect, never from the keychain. Skip the
+    // keychain fallback so a stale token can't be reused.
+    let iam_auth = expanded_params.use_iam_auth.unwrap_or(false);
+
+    // Fail-fast with an actionable message if IAM is enabled but no token
+    // was supplied. Without this guard, the list_databases call would try
+    // to build a pool with an empty password and the server would reply
+    // with the opaque "1045 Access denied" — confusing for the user. The
+    // error below tells them exactly what to do.
+    if iam_auth
+        && request.params.password.as_deref().unwrap_or("").is_empty()
+        && expanded_params.password.as_deref().unwrap_or("").is_empty()
+    {
+        return Err(
+            "AWS IAM authentication is enabled but the password field is empty. \
+             Paste the output of `aws rds generate-db-auth-token` into the \
+             password field and try again. Tokens expire every 15 minutes."
+                .to_string(),
+        );
+    }
+
+    if !iam_auth && request.params.password.is_none() && expanded_params.password.is_none() {
         let saved_conn = match &request.connection_id {
             Some(id) => find_connection_by_id(&app, id).ok(),
             None => None,
