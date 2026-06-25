@@ -4163,6 +4163,89 @@ pub async fn create_connection_group<R: Runtime>(
     Ok(group)
 }
 
+/// Splits a `/`-separated group path into trimmed, non-empty segments.
+/// Returns an error if the result is empty.
+pub(crate) fn parse_group_path(path: &str) -> Result<Vec<String>, String> {
+    let segments: Vec<String> = path
+        .split('/')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if segments.is_empty() {
+        return Err("Group path cannot be empty".to_string());
+    }
+    Ok(segments)
+}
+
+/// Finds an existing group by case-insensitive name match within a parent's
+/// children, or `None` if no such group exists.
+pub(crate) fn find_child_group<'a>(
+    groups: &'a [ConnectionGroup],
+    name: &str,
+    parent_id: &Option<String>,
+) -> Option<&'a ConnectionGroup> {
+    let name_lower = name.to_lowercase();
+    groups
+        .iter()
+        .find(|g| g.name.to_lowercase() == name_lower && g.parent_id == *parent_id)
+}
+
+/// Creates a nested group hierarchy from a `/`-separated path.
+///
+/// Each segment of `path` becomes one group. Existing segments are reused
+/// (looked up case-insensitively among the children of the current parent);
+/// missing segments are created in order. The final segment is returned.
+/// The hierarchy is created atomically: either every missing segment is
+/// persisted or none are.
+#[tauri::command]
+pub async fn create_group_path<R: Runtime>(
+    app: AppHandle<R>,
+    path: String,
+    parent_id: Option<String>,
+) -> Result<ConnectionGroup, String> {
+    let path_cfg = get_config_path(&app)?;
+    let mut file = persistence::load_connections_file(&path_cfg).unwrap_or_default();
+
+    if let Some(pid) = &parent_id {
+        if !file.groups.iter().any(|g| &g.id == pid) {
+            return Err(format!("Parent group with ID {} not found", pid));
+        }
+    }
+
+    let segments = parse_group_path(&path)?;
+    let mut current_parent = parent_id;
+    let mut last_created: Option<ConnectionGroup> = None;
+
+    for seg in segments {
+        if let Some(g) = find_child_group(&file.groups, &seg, &current_parent).cloned() {
+            current_parent = Some(g.id.clone());
+            last_created = Some(g);
+            continue;
+        }
+        let max_order = file
+            .groups
+            .iter()
+            .filter(|g| g.parent_id == current_parent)
+            .map(|g| g.sort_order)
+            .max()
+            .unwrap_or(-1);
+        let new_group = ConnectionGroup {
+            id: Uuid::new_v4().to_string(),
+            name: seg,
+            collapsed: false,
+            sort_order: max_order + 1,
+            parent_id: current_parent.clone(),
+        };
+        current_parent = Some(new_group.id.clone());
+        last_created = Some(new_group.clone());
+        file.groups.push(new_group);
+    }
+
+    save_connections_and_invalidate(&app, &path_cfg, &file)?;
+
+    last_created.ok_or_else(|| "Group path resolved to an empty hierarchy".to_string())
+}
+
 #[tauri::command]
 pub async fn update_connection_group<R: Runtime>(
     app: AppHandle<R>,

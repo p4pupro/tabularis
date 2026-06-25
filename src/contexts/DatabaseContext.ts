@@ -154,6 +154,12 @@ export interface DatabaseContextType {
   isConnectionOpen: (connectionId: string) => boolean;
   // Connection Group methods
   createGroup: (name: string, parentId?: string | null) => Promise<ConnectionGroup>;
+  /**
+   * Creates a nested hierarchy from a `/`-separated path (e.g.
+   * "TEST/flexways"). Existing segments are reused, missing ones are
+   * created. Returns the deepest (last) group.
+   */
+  createGroupPath: (path: string, parentId?: string | null) => Promise<ConnectionGroup>;
   updateGroup: (id: string, updates: { name?: string; collapsed?: boolean; sort_order?: number }) => Promise<void>;
   /** Re-parent a group. `parentId === null` moves the group to the top
    * level; `undefined` would be a no-op (kept distinct to match the

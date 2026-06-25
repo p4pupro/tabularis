@@ -1335,7 +1335,8 @@
     "createFirst": "创建您的第一个分组以组织连接",
     "groupName": "分组名称",
     "dragHint": "将连接拖到此处",
-    "createError": "创建分组失败"
+    "createError": "创建分组失败",
+    "subgroupNamePrompt": "Subfolder name (use / for nested levels)"
   },
   "queryModal": {
     "database": "数据库",
