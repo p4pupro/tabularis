@@ -63,6 +63,9 @@ interface ConnectionParams {
   // MySQL: force PIPES_AS_CONCAT / NO_ENGINE_SUBSTITUTION sql_mode on connect.
   // Defaults to true; disable for Vitess/PlanetScale which reject altering sql_mode.
   pipes_as_concat?: boolean;
+  // AWS RDS IAM authentication (mysql only): when true, the password field
+  // holds a pre-signed RDS auth token instead of a real password.
+  use_iam_auth?: boolean;
   // SSH
   ssh_enabled?: boolean;
   ssh_connection_id?: string;
@@ -1556,6 +1559,46 @@ export const NewConnectionModal = ({
               </button>
             </div>
           </div>
+
+          {/* AWS RDS IAM authentication (mysql only) */}
+          {driver === "mysql" && (
+            <div className="pt-2 border-t border-strong/50">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={!!formData.use_iam_auth}
+                  onChange={(e) =>
+                    updateField("use_iam_auth", e.target.checked)
+                  }
+                  className="mt-0.5 rounded border-strong bg-base text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                />
+                <div className="flex-1">
+                  <div className="text-sm text-primary font-medium">
+                    {t("newConnection.useIamAuth", {
+                      defaultValue: "Use AWS IAM Authentication (RDS)",
+                    })}
+                  </div>
+                  <div className="text-xs text-muted mt-0.5">
+                    {t("newConnection.useIamAuthHint", {
+                      defaultValue:
+                        "The password field is treated as an RDS auth token (from `aws rds generate-db-auth-token`). Requires TLS. Tokens expire every 15 minutes.",
+                    })}
+                  </div>
+                  {formData.use_iam_auth &&
+                    (formData.ssl_mode === "disabled" ||
+                      formData.ssl_mode === "disable" ||
+                      !formData.ssl_mode) && (
+                      <div className="text-xs text-amber-500 mt-1">
+                        {t("newConnection.useIamAuthTlsRequired", {
+                          defaultValue:
+                            "Enable an SSL mode above to use AWS IAM authentication.",
+                        })}
+                      </div>
+                    )}
+                </div>
+              </label>
+            </div>
+          )}
         </div>
       )}
     </div>

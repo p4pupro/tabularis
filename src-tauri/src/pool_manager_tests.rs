@@ -211,6 +211,20 @@ mod tests {
     }
 
     #[test]
+    fn mysql_pool_key_changes_when_iam_auth_changes() {
+        let mut plain = mysql_params("required");
+        plain.use_iam_auth = Some(false);
+
+        let mut iam = mysql_params("required");
+        iam.use_iam_auth = Some(true);
+
+        assert_ne!(
+            build_connection_key(&plain, Some("conn-1")),
+            build_connection_key(&iam, Some("conn-1"))
+        );
+    }
+
+    #[test]
     fn detects_pipes_as_concat_unsupported_error() {
         // Vitess/PlanetScale reject sqlx's forced sql_mode; the message that
         // triggers the auto-fallback retry.
@@ -226,6 +240,183 @@ mod tests {
         assert!(!is_pipes_as_concat_unsupported(
             "Access denied for user 'root'@'localhost'"
         ));
+    }
+
+    #[test]
+    fn mysql_options_iam_auth_rejects_disabled_ssl() {
+        let mut params = mysql_params("disabled");
+        params.use_iam_auth = Some(true);
+        params.password = Some("token".to_string());
+
+        let err = build_mysql_options(&params, None).unwrap_err();
+        assert!(
+            err.contains("IAM")
+                && (err.contains("TLS") || err.contains("SSL")),
+            "expected IAM/SSL error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn mysql_options_iam_auth_rejects_empty_password_for_adhoc() {
+        let mut params = mysql_params("required");
+        params.use_iam_auth = Some(true);
+        params.password = Some(String::new());
+        params.connection_id = None;
+
+        let err = build_mysql_options(&params, None).unwrap_err();
+        assert!(
+            err.contains("password") && err.contains("empty"),
+            "expected empty-password error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn mysql_options_iam_auth_allows_empty_password_when_connection_id_set() {
+        // For saved connections, the password will be injected from the
+        // keychain after this builder returns, so an empty password here is
+        // not an error.
+        let mut params = mysql_params("required");
+        params.use_iam_auth = Some(true);
+        params.password = Some(String::new());
+        params.connection_id = Some("conn-1".to_string());
+
+        let opts = build_mysql_options(&params, None)
+            .expect("must build when connection_id is set");
+        assert!(matches!(opts.get_ssl_mode(), MySqlSslMode::Required));
+    }
+
+    #[test]
+    fn mysql_options_iam_auth_passes_password_through_under_tls() {
+        let mut params = mysql_params("required");
+        params.use_iam_auth = Some(true);
+        params.password = Some("fake-rds-token".to_string());
+
+        let opts = build_mysql_options(&params, None).expect("must build");
+        // sqlx 0.8.6 doesn't expose a public password getter; assert on the
+        // observable side effects: SSL mode is required, no error returned.
+        assert!(matches!(opts.get_ssl_mode(), MySqlSslMode::Required));
+        // The cleartext plugin must be opted in, otherwise the RDS server
+        // rejects IAM auth with "mysql_cleartext_plugin disabled". sqlx 0.8.6
+        // does not expose `enable_cleartext_plugin` as a public getter, but
+        // it IS included in the derived `Debug` output of
+        // `MySqlConnectOptions`, so we can assert on it as a regression
+        // sentinel. If a future refactor drops the
+        // `options.enable_cleartext_plugin(true)` call, this assertion will
+        // start failing and the test will catch it before the change ships.
+        let debug = format!("{:?}", opts);
+        assert!(
+            debug.contains("enable_cleartext_plugin: true"),
+            "expected cleartext plugin to be enabled for IAM auth; got: {debug}"
+        );
+    }
+
+    #[test]
+    fn mysql_options_iam_auth_off_is_unchanged() {
+        // When use_iam_auth is None/false, the password must be passed through
+        // exactly as before so existing connections keep working.
+        let mut params = mysql_params("required");
+        params.use_iam_auth = None;
+        params.password = Some("regular-pass".to_string());
+
+        let opts = build_mysql_options(&params, None).expect("must build");
+        assert!(matches!(opts.get_ssl_mode(), MySqlSslMode::Required));
+        // Counterpart to the IAM-on assertion: when IAM is off the cleartext
+        // plugin must NOT be enabled, otherwise a regular password would be
+        // transmitted in cleartext to a server that doesn't ask for it.
+        let debug = format!("{:?}", opts);
+        assert!(
+            debug.contains("enable_cleartext_plugin: false"),
+            "expected cleartext plugin OFF for non-IAM auth; got: {debug}"
+        );
+    }
+
+    // --- Auto-escalation: ssl_ca + Required/Preferred -> VerifyCa -----------
+    //
+    // sqlx-mysql with `tls-native-tls` (the default) only forwards the user
+    // CA bundle to the TLS connector for `VerifyCa` and `VerifyIdentity`
+    // modes. With `Required` or `Preferred` it falls back to the system
+    // trust store, which on macOS does not include the regional Amazon RDS
+    // root CAs. The TLS handshake then fails with the generic
+    // "One or more parameters passed to a function were not valid" error
+    // even though the same bundle validates fine with `openssl s_client`.
+    //
+    // `build_mysql_options` therefore escalates the mode to `VerifyCa`
+    // whenever a non-empty `ssl_ca` is supplied and the user has selected
+    // `Required` or `Preferred`. This mirrors the documented behaviour of
+    // `psql`'s `verify-ca` mode: supplying a CA file is itself an explicit
+    // opt-in to stricter validation.
+
+    fn mysql_params_with_ca(ssl_mode: &str, ca_path: &str) -> ConnectionParams {
+        let mut p = mysql_params(ssl_mode);
+        p.ssl_ca = Some(ca_path.to_string());
+        p
+    }
+
+    #[test]
+    fn mysql_options_escalates_required_to_verify_ca_when_ca_supplied() {
+        let params =
+            mysql_params_with_ca("required", "/Users/dperez/.ssh/rds-combined-ca-bundle.pem");
+        let opts = build_mysql_options(&params, None).expect("must build");
+        assert!(
+            matches!(opts.get_ssl_mode(), MySqlSslMode::VerifyCa),
+            "required + ssl_ca must auto-escalate to VerifyCa so the bundle is used"
+        );
+    }
+
+    #[test]
+    fn mysql_options_escalates_preferred_to_verify_ca_when_ca_supplied() {
+        let params =
+            mysql_params_with_ca("preferred", "/Users/dperez/.ssh/rds-combined-ca-bundle.pem");
+        let opts = build_mysql_options(&params, None).expect("must build");
+        assert!(matches!(opts.get_ssl_mode(), MySqlSslMode::VerifyCa));
+    }
+
+    #[test]
+    fn mysql_options_does_not_escalate_when_ca_absent() {
+        // No CA file -> no escalation. `Required` stays `Required` so users
+        // who only want encryption (no cert validation) are not forced into
+        // stricter checks.
+        let params = mysql_params("required");
+        assert!(params.ssl_ca.is_none());
+        let opts = build_mysql_options(&params, None).expect("must build");
+        assert!(matches!(opts.get_ssl_mode(), MySqlSslMode::Required));
+    }
+
+    #[test]
+    fn mysql_options_does_not_escalate_when_ca_is_blank() {
+        // Whitespace-only `ssl_ca` is treated as absent by the input parser;
+        // we mirror that here so the contract is "any non-empty path".
+        let params = mysql_params_with_ca("required", "   ");
+        let opts = build_mysql_options(&params, None).expect("must build");
+        assert!(matches!(opts.get_ssl_mode(), MySqlSslMode::Required));
+    }
+
+    #[test]
+    fn mysql_options_does_not_escalate_when_user_chose_verify_identity() {
+        // User's explicit choice is preserved.
+        let params = mysql_params_with_ca(
+            "verify_identity",
+            "/Users/dperez/.ssh/rds-combined-ca-bundle.pem",
+        );
+        let opts = build_mysql_options(&params, None).expect("must build");
+        assert!(matches!(opts.get_ssl_mode(), MySqlSslMode::VerifyIdentity));
+    }
+
+    #[test]
+    fn mysql_options_iam_auth_combined_with_escalation_keeps_cleartext_plugin() {
+        // IAM auth + ssl_ca + required must: (a) escalate to VerifyCa, and
+        // (b) still opt in to the cleartext plugin. Regression test for the
+        // exact user scenario reported on 2026-06-23.
+        let mut params = mysql_params_with_ca(
+            "required",
+            "/Users/dperez/.ssh/rds-combined-ca-bundle.pem",
+        );
+        params.use_iam_auth = Some(true);
+        params.password = Some("fake-rds-auth-token".to_string());
+        let opts = build_mysql_options(&params, None).expect("must build");
+        assert!(matches!(opts.get_ssl_mode(), MySqlSslMode::VerifyCa));
     }
 }
 

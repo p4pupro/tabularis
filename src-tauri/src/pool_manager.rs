@@ -96,12 +96,17 @@ pub(crate) fn build_connection_key(
 ) -> String {
     let tls_key = match params.driver.as_str() {
         "mysql" => Some(format!(
-            "ssl:{}:{}:{}:{}:pipes:{}",
+            "ssl:{}:{}:{}:{}:pipes:{}:iam:{}",
             params.ssl_mode.as_deref().unwrap_or("default"),
             params.ssl_ca.as_deref().unwrap_or(""),
             params.ssl_cert.as_deref().unwrap_or(""),
             params.ssl_key.as_deref().unwrap_or(""),
-            params.pipes_as_concat.unwrap_or(true)
+            params.pipes_as_concat.unwrap_or(true),
+            if params.use_iam_auth.unwrap_or(false) {
+                "true"
+            } else {
+                "false"
+            }
         )),
         "postgres" => {
             let ssl_mode = params.ssl_mode.as_deref().unwrap_or("prefer");
@@ -161,19 +166,27 @@ pub(crate) fn build_mysql_options(
     let database = override_db.unwrap_or_else(|| params.database.primary());
     let timezone = mysql_string_setting("timezone", DEFAULT_MYSQL_TIMEZONE);
 
-    let mut options = MySqlConnectOptions::new()
-        .host(host)
-        .port(port)
-        .username(username)
-        .database(database)
-        .timezone(timezone);
-
-    if !password.is_empty() {
-        options = options.password(password);
-    }
-
-    // Configure SSL mode based on params.ssl_mode
-    let ssl_mode = match params.ssl_mode.as_deref().unwrap_or("required") {
+    // Configure SSL mode based on params.ssl_mode.
+    //
+    // Auto-escalation: when the user supplies an explicit `ssl_ca` but the
+    // selected mode is `Required` or `Preferred`, sqlx-mysql with
+    // `tls-native-tls` (the default) does not actually pass the CA bundle to
+    // the TLS connector for those modes - it only does so for `VerifyCa` and
+    // `VerifyIdentity`. On macOS this means Secure Transport uses the system
+    // keychain, which does not trust the regional Amazon RDS root CAs, and
+    // the handshake fails with the opaque error
+    // "error occurred while attempting to establish a TLS connection:
+    // One or more parameters passed to a function were not valid." even
+    // though the same bundle validates fine with `openssl s_client`.
+    //
+    // Escalating to `VerifyCa` whenever a CA file is present mirrors the
+    // documented behaviour of `psql`'s `verify-ca` mode: the user has
+    // explicitly opted into a stricter check by supplying a CA file.
+    let has_user_ca = params
+        .ssl_ca
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty());
+    let mut ssl_mode = match params.ssl_mode.as_deref().unwrap_or("required") {
         "disabled" | "disable" => MySqlSslMode::Disabled,
         "preferred" | "prefer" => MySqlSslMode::Preferred,
         "required" | "require" => MySqlSslMode::Required,
@@ -181,7 +194,80 @@ pub(crate) fn build_mysql_options(
         "verify_identity" => MySqlSslMode::VerifyIdentity,
         _ => MySqlSslMode::Required,
     };
-    options = options.ssl_mode(ssl_mode);
+    if has_user_ca
+        && matches!(ssl_mode, MySqlSslMode::Required | MySqlSslMode::Preferred)
+    {
+        ssl_mode = MySqlSslMode::VerifyCa;
+    }
+
+    // AWS RDS IAM authentication: when enabled, `password` holds a pre-signed
+    // RDS auth token (from `aws rds generate-db-auth-token`). The token is sent
+    // as a cleartext password over a TLS-required connection, exactly as the
+    // MySQL client would when negotiating the `mysql_clear_password` plugin
+    // against an RDS instance that has IAM auth enabled. Refuse to send it
+    // over an unencrypted link.
+    if params.use_iam_auth.unwrap_or(false) {
+        if matches!(ssl_mode, MySqlSslMode::Disabled) {
+            return Err(
+                "AWS IAM authentication requires a TLS/SSL mode to be enabled \
+                 (Preferred, Required, Verify CA, or Verify Identity). Refusing \
+                 to send the RDS auth token over an unencrypted connection."
+                    .to_string(),
+            );
+        }
+        // For ad-hoc connections we have no way to recover a missing token.
+        // For saved connections (connection_id present) we allow an empty
+        // password here because the caller will inject it from the keychain
+        // *after* this builder returns.
+        if password.is_empty() && params.connection_id.is_none() {
+            return Err(
+                "AWS IAM authentication is enabled but the password field is \
+                 empty. Paste the output of `aws rds generate-db-auth-token` \
+                 into the password field."
+                    .to_string(),
+            );
+        }
+    }
+
+    // One-shot diagnostic so we can confirm what's reaching sqlx from the
+    // app side. Logs the user-visible ssl_mode, the user-supplied CA path,
+    // whether the path was non-empty (drives the auto-escalation), the
+    // final effective ssl_mode, and whether the cleartext plugin is being
+    // requested (only meaningful for IAM auth). All five pieces together
+    // are enough to tell from a single log line whether the connection is
+    // being constructed the way we expect.
+    log::info!(
+        "build_mysql_options: driver=mysql host={host} port={port} \
+         ssl_mode_param={:?} ssl_ca_present={} effective_ssl_mode={:?} \
+         iam_auth={} password_len={}",
+        params.ssl_mode,
+        has_user_ca,
+        ssl_mode,
+        params.use_iam_auth.unwrap_or(false),
+        password.len(),
+    );
+
+    let mut options = MySqlConnectOptions::new()
+        .host(host)
+        .port(port)
+        .username(username)
+        .database(database)
+        .timezone(timezone)
+        .ssl_mode(ssl_mode);
+
+    // Skip `.password(...)` when the password is empty. Two cases:
+    //   1. Ad-hoc test connection with an empty password → sqlx will
+    //      attempt a passwordless handshake and the server will reject it,
+    //      which is the correct user-visible error.
+    //   2. Saved connection under IAM auth where the caller will inject the
+    //      RDS auth token from the keychain (or fail-fast) *after* this
+    //      builder returns. We must not stamp a stale token here, and we
+    //      must not stamp an empty string either (sqlx interprets `""` as
+    //      "user pressed Enter" and the server replies with
+    //      "Access denied for user ... (using password: YES)").
+    if !password.is_empty() {
+        options = options.password(password);
+    }
 
     // Apply SSL certificates if provided in params
     if let Some(ca) = &params.ssl_ca {
@@ -201,6 +287,15 @@ pub(crate) fn build_mysql_options(
     options = options
         .pipes_as_concat(force_sql_mode)
         .no_engine_substitution(force_sql_mode);
+
+    // AWS RDS IAM authentication: the server announces
+    // `mysql_clear_password` as the auth plugin and rejects the handshake
+    // with "mysql_cleartext_plugin disabled" unless the client opts in.
+    // Enabling it here is safe because the token only ever travels over the
+    // TLS link we configured above.
+    if params.use_iam_auth.unwrap_or(false) {
+        options = options.enable_cleartext_plugin(true);
+    }
 
     Ok(options)
 }
@@ -701,6 +796,12 @@ async fn get_mysql_pool_for_database_with_id(
         params.host,
         key
     );
+    // sqlx-mysql's rustls backend (selected when sqlx is built with
+    // `tls-rustls` and not `tls-native-tls`) panics on the first handshake
+    // unless a process-level `CryptoProvider` has been installed. We share
+    // the same install-once helper the Postgres deadpool path uses.
+    ensure_rustls_crypto_provider();
+    let options = build_mysql_options(params, override_db)?;
     let connect_timeout = Duration::from_millis(mysql_numeric_setting(
         "connectTimeout",
         DEFAULT_MYSQL_CONNECT_TIMEOUT_MS,
