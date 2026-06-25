@@ -125,6 +125,11 @@ pub struct ConnectionParams {
     pub ssl_ca: Option<String>,
     pub ssl_cert: Option<String>,
     pub ssl_key: Option<String>,
+    // When true, `password` is a pre-signed RDS auth token (from
+    // `aws rds generate-db-auth-token`) instead of a real password.
+    // Requires TLS; only meaningful for the `mysql` driver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_iam_auth: Option<bool>,
     // SSH Tunnel
     pub ssh_enabled: Option<bool>,
     pub ssh_connection_id: Option<String>,
@@ -202,6 +207,10 @@ pub struct ConnectionGroup {
     pub collapsed: bool,
     #[serde(default)]
     pub sort_order: i32,
+    /// `Some(group_id)` makes this group a child of that group; `None` is a
+    /// top-level root. Cycles are rejected by the backend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]

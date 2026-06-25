@@ -704,7 +704,10 @@
     "selectK8sConnection": "Sélectionner une connexion K8s",
     "selectTypeFirst": "Sélectionnez d'abord contexte/namespace/type",
     "useK8s": "Utiliser le Port-Forward Kubernetes",
-    "useK8sConnection": "Connexion enregistrée"
+    "useK8sConnection": "Connexion enregistrée",
+    "useIamAuth": "Utiliser l'authentification AWS IAM (RDS)",
+    "useIamAuthHint": "Le champ mot de passe est traité comme un jeton d'authentification RDS (généré par `aws rds generate-db-auth-token`). Nécessite TLS. Les jetons expirent toutes les 15 minutes.",
+    "useIamAuthTlsRequired": "Activez un mode SSL ci-dessus pour utiliser l'authentification AWS IAM."
   },
   "sshConnections": {
     "title": "Connexions SSH",
