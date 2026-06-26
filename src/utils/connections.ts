@@ -12,6 +12,13 @@ export type DatabaseDriver = string;
 export const BUILTIN_DRIVER_IDS = ["postgres", "mysql", "sqlite"] as const;
 export type BuiltinDriverId = (typeof BUILTIN_DRIVER_IDS)[number];
 
+/**
+ * Display-oriented view of a `ConnectionParams`. The Rust model uses
+ * `DatabaseSelection` (string for single-db, array for multi-db), so
+ * the canonical TS shape lives in `types/connection.ts`. This local
+ * alias narrows `database` to a string for the display/validation
+ * helpers in this file, which always look at a single value.
+ */
 export interface ConnectionParams {
   driver: DatabaseDriver;
   host?: string;
@@ -19,6 +26,14 @@ export interface ConnectionParams {
   port?: number;
   username?: string;
   password?: string;
+  // SSL/TLS — used by mysql/postgres, persisted on disk and exported
+  ssl_mode?: string;
+  ssl_ca?: string;
+  ssl_cert?: string;
+  ssl_key?: string;
+  // AWS RDS IAM auth — when true, `password` is a pre-signed RDS token
+  use_iam_auth?: boolean;
+  // SSH
   ssh_enabled?: boolean;
   ssh_connection_id?: string;
   // Legacy fields (for backward compatibility)
@@ -28,6 +43,7 @@ export interface ConnectionParams {
   ssh_password?: string;
   ssh_key_file?: string;
   ssh_key_passphrase?: string;
+  save_in_keychain?: boolean;
   // K8s
   k8s_enabled?: boolean;
   k8s_connection_id?: string;

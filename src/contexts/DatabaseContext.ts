@@ -1,5 +1,10 @@
 import { createContext } from 'react';
 import type { DriverCapabilities } from '../types/plugins';
+import type {
+  SavedConnection as CanonicalSavedConnection,
+  IconOverride,
+  ConnectionAppearance,
+} from '../types/connection';
 
 export interface TableInfo {
   name: string;
@@ -25,36 +30,21 @@ export interface TriggerInfo {
   definition?: string;
 }
 
-export type IconOverride =
-  | { type: "pack";  id: string }
-  | { type: "emoji"; value: string }
-  | { type: "image"; path: string };
+// Re-export the appearance types from the canonical module so that
+// existing consumers that import them from `DatabaseContext` keep
+// working.
+export type { IconOverride, ConnectionAppearance };
 
-export interface ConnectionAppearance {
-  icon?: IconOverride;
-  accentColor?: string;
-}
-
-export interface SavedConnection {
-  id: string;
-  name: string;
-  params: {
-    driver: string;
-    host?: string;
-    database: string | string[];
-    port?: number;
-    username?: string;
-    password?: string;
-    ssh_enabled?: boolean;
-    ssh_connection_id?: string;
-    k8s_enabled?: boolean;
-    k8s_connection_id?: string;
-  };
+/**
+ * A connection as it lives in the app's `connections.json` and in the
+ * export payload. Mirrors the canonical `SavedConnection` from
+ * `types/connection.ts` (which carries the full `ConnectionParams`
+ * including SSL fields and `use_iam_auth`) and adds two display-only
+ * fields: the owning group's id and the sort order within the group.
+ */
+export interface SavedConnection extends CanonicalSavedConnection {
   group_id?: string;
   sort_order?: number;
-  /** Per-connection opt-in: detect JSON in plain text columns. */
-  detect_json_in_text_columns?: boolean;
-  appearance?: ConnectionAppearance;
 }
 
 export interface ConnectionGroup {

@@ -17,7 +17,7 @@ import {
   EyeOff,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
-import type { ConnectionAppearance } from "../../contexts/DatabaseContext";
+import type { ConnectionAppearance } from "../../types/connection";
 import { AppearanceSection } from "./NewConnectionModal/AppearanceSection";
 import { open } from "@tauri-apps/plugin-dialog";
 import clsx from "clsx";
@@ -45,48 +45,7 @@ import {
   parseConnectionString,
   toConnectionParams,
 } from "../../utils/connectionStringParser";
-
-interface ConnectionParams {
-  driver: string;
-  host?: string;
-  port?: number;
-  username?: string;
-  password?: string;
-  database: string | string[];
-  ssl_mode?: string;
-  ssl_ca?: string;
-  ssl_cert?: string;
-  ssl_key?: string;
-  // When true, the password field is an RDS auth token (mysql only).
-  use_iam_auth?: boolean;
-  // SSH
-  ssh_enabled?: boolean;
-  ssh_connection_id?: string;
-  // Legacy SSH fields (for backward compatibility)
-  ssh_host?: string;
-  ssh_port?: number;
-  ssh_user?: string;
-  ssh_password?: string;
-  ssh_key_file?: string;
-  ssh_key_passphrase?: string;
-  save_in_keychain?: boolean;
-  // K8s
-  k8s_enabled?: boolean;
-  k8s_connection_id?: string;
-  k8s_context?: string;
-  k8s_namespace?: string;
-  k8s_resource_type?: string;
-  k8s_resource_name?: string;
-  k8s_port?: number;
-}
-
-interface SavedConnection {
-  id: string;
-  name: string;
-  params: ConnectionParams;
-  detect_json_in_text_columns?: boolean;
-  appearance?: ConnectionAppearance;
-}
+import type { ConnectionParams, SavedConnection } from "../../types/connection";
 
 interface NewConnectionModalProps {
   isOpen: boolean;
@@ -614,7 +573,17 @@ export const NewConnectionModal = ({
 
   const handleDriverChange = (newDriver: string) => {
     setDriver(newDriver);
-    setFormData({
+    setFormData((prev) => ({
+      // Preserve fields that are driver-agnostic and round-trip through
+      // export/import: SSL materials, AWS IAM auth flag, and keychain
+      // preference. The other driver-specific fields are reset to
+      // their defaults below.
+      ssl_ca: prev.ssl_ca,
+      ssl_cert: prev.ssl_cert,
+      ssl_key: prev.ssl_key,
+      use_iam_auth: prev.use_iam_auth,
+      save_in_keychain: prev.save_in_keychain,
+      // Driver-specific reset
       driver: newDriver,
       host: "",
       port: drivers.find((d) => d.id === newDriver)?.default_port ?? undefined,
@@ -630,7 +599,6 @@ export const NewConnectionModal = ({
       ssh_password: undefined,
       ssh_key_file: undefined,
       ssh_key_passphrase: undefined,
-      save_in_keychain: false,
       k8s_enabled: false,
       k8s_connection_id: undefined,
       k8s_context: undefined,
@@ -638,7 +606,7 @@ export const NewConnectionModal = ({
       k8s_resource_type: undefined,
       k8s_resource_name: undefined,
       k8s_port: undefined,
-    });
+    }));
     setIsK8sPortOverridden(false);
     setSelectedDatabasesState([]);
     setDbSearchQuery("");

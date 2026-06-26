@@ -1,23 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ConnectionParams } from "../types/connection";
 
-interface ConnectionParams {
-  driver: string;
-  host?: string;
-  port?: number;
-  username?: string;
-  password?: string;
-  database: string | string[];
-  ssl_mode?: string;
-  ssh_enabled?: boolean;
-  ssh_connection_id?: string;
-  ssh_host?: string;
-  ssh_port?: number;
-  ssh_user?: string;
-  ssh_password?: string;
-  ssh_key_file?: string;
-  ssh_key_passphrase?: string;
-  save_in_keychain?: boolean;
-}
+// Re-use the canonical `ConnectionParams` shape from `types/connection`
+// so that the SSL fields (`ssl_ca`, `ssl_cert`, `ssl_key`) and the AWS
+// IAM auth flag (`use_iam_auth`) are typed and survive the roundtrip
+// through `get_connection_by_id` -> form -> `update_connection` ->
+// `export_connections_payload` -> `import_connections_payload`.
+export type { ConnectionParams };
 
 export interface SavedConnectionWithCredentials {
   id: string;

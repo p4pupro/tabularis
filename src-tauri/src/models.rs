@@ -2,6 +2,14 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+/// Returns `true` when the `use_iam_auth` value should be omitted from
+/// the on-disk JSON and the export payload. Both `None` (the default)
+/// and `Some(false)` count as "off" and are skipped; only `Some(true)`
+/// is serialized. See `ConnectionParams::use_iam_auth`.
+pub fn is_iam_auth_off(v: &Option<bool>) -> bool {
+    !matches!(v, Some(true))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum DatabaseSelection {
@@ -128,7 +136,15 @@ pub struct ConnectionParams {
     // When true, `password` is a pre-signed RDS auth token (from
     // `aws rds generate-db-auth-token`) instead of a real password.
     // Requires TLS; only meaningful for the `mysql` driver.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // Both `None` and `Some(false)` are skipped from the on-disk JSON
+    // and the export payload, so only `"use_iam_auth":true` is ever
+    // written. The import side still accepts any of `true`, `false`,
+    // or absent — all three round-trip back to a value the backend
+    // treats as off except for `Some(true)`.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::models::is_iam_auth_off"
+    )]
     pub use_iam_auth: Option<bool>,
     // SSH Tunnel
     pub ssh_enabled: Option<bool>,
