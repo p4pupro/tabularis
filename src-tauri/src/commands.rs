@@ -441,6 +441,40 @@ pub fn find_connection_by_id<R: Runtime>(
     Ok(conn)
 }
 
+/// Merge a list of incoming groups into an existing list, preserving hierarchy
+/// and repairing any `parent_id` that points to a group id not present in the
+/// union (i.e. neither in the existing list nor in the incoming batch).
+///
+/// Behaviour:
+/// - Existing groups with the same id are overwritten by the incoming one
+///   (so renames / re-ordering / new parent_id from the JSON win).
+/// - Missing parents are demoted to root (`parent_id = None`) rather than
+///   being rejected, so a partially-malformed JSON still imports successfully
+///   and the user keeps most of their tree.
+/// - The merge is idempotent: running it twice on the same input is a no-op.
+pub(crate) fn merge_groups(existing: &mut Vec<ConnectionGroup>, incoming: Vec<ConnectionGroup>) {
+    for new_group in incoming {
+        if let Some(existing_group) = existing.iter_mut().find(|g| g.id == new_group.id) {
+            *existing_group = new_group;
+        } else {
+            existing.push(new_group);
+        }
+    }
+
+    // Build the set of every group id we now have (post-merge) so we can
+    // detect parent_ids that no longer point anywhere. Collected into an
+    // owned set to release the immutable borrow before we mutate existing.
+    let known_ids: std::collections::HashSet<String> =
+        existing.iter().map(|g| g.id.clone()).collect();
+    for g in existing.iter_mut() {
+        if let Some(parent) = g.parent_id.as_deref() {
+            if !known_ids.contains(parent) {
+                g.parent_id = None;
+            }
+        }
+    }
+}
+
 /// Write the connections file and invalidate the in-memory connection cache so
 /// the next `find_connection_by_id` call re-reads fresh data from disk.
 fn save_connections_and_invalidate<R: Runtime>(
@@ -4514,14 +4548,8 @@ pub async fn import_connections_payload<R: Runtime>(
         .inner()
         .clone();
 
-    // Merge groups
-    for new_group in payload.groups {
-        if let Some(existing) = current_file.groups.iter_mut().find(|g| g.id == new_group.id) {
-            *existing = new_group;
-        } else {
-            current_file.groups.push(new_group);
-        }
-    }
+    // Merge groups (preserves hierarchy; demotes orphaned parent_ids to root)
+    merge_groups(&mut current_file.groups, payload.groups);
 
     // Merge connections and handle passwords
     for mut new_conn in payload.connections {

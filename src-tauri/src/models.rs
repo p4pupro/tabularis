@@ -214,7 +214,7 @@ pub struct SavedConnection {
     pub appearance: Option<ConnectionAppearance>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct ConnectionGroup {
     pub id: String,
     pub name: String,
