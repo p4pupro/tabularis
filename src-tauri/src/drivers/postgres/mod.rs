@@ -17,11 +17,11 @@ use crate::models::{
 };
 use crate::pool_manager::get_postgres_pool;
 use binding::{PgValueOptions, bind_pg_value, build_pk_map_predicate};
-use client::{execute, format_pg_error, get_client, query_all, query_one};
+use client::{execute, execute_typed, format_pg_error, get_client, query_all, query_one, query_one_typed};
 pub use explain::explain_query;
 use extract::extract_value;
 use helpers::{escape_identifier, extract_base_type, is_implicit_cast_compatible};
-use tokio_postgres::types::ToSql;
+use tokio_postgres::types::{ToSql, Type};
 
 pub async fn get_schemas(params: &ConnectionParams) -> Result<Vec<String>, String> {
     let pool = get_postgres_pool(params).await?;
@@ -431,11 +431,11 @@ pub async fn save_blob_column_to_file(
         predicate,
     );
 
-    let params_ref: Vec<&(dyn ToSql + Sync)> = pk_params
+    let params_ref: Vec<(&(dyn ToSql + Sync), Type)> = pk_params
         .iter()
-        .map(|b| b.as_ref() as &(dyn ToSql + Sync))
+        .map(|(b, t)| (b.as_ref() as &(dyn ToSql + Sync), t.clone()))
         .collect();
-    let row = query_one(&pool, &query, &params_ref).await?;
+    let row = query_one_typed(&pool, &query, &params_ref).await?;
 
     let bytes: Vec<u8> = row.try_get(0).map_err(|e| format_pg_error(&e))?;
     std::fs::write(file_path, bytes).map_err(|e| e.to_string())
@@ -460,11 +460,11 @@ pub async fn fetch_blob_column_as_data_url(
         predicate,
     );
 
-    let params_ref: Vec<&(dyn ToSql + Sync)> = pk_params
+    let params_ref: Vec<(&(dyn ToSql + Sync), Type)> = pk_params
         .iter()
-        .map(|b| b.as_ref() as &(dyn ToSql + Sync))
+        .map(|(b, t)| (b.as_ref() as &(dyn ToSql + Sync), t.clone()))
         .collect();
-    let row = query_one(&pool, &query, &params_ref).await?;
+    let row = query_one_typed(&pool, &query, &params_ref).await?;
 
     let bytes: Vec<u8> = row.try_get(0).map_err(|e| format_pg_error(&e))?;
     Ok(crate::drivers::common::encode_blob_full(&bytes))
@@ -582,11 +582,11 @@ pub async fn delete_record(
         predicate,
     );
 
-    let params_ref: Vec<&(dyn ToSql + Sync)> = pk_params
+    let params_ref: Vec<(&(dyn ToSql + Sync), Type)> = pk_params
         .iter()
-        .map(|b| b.as_ref() as &(dyn ToSql + Sync))
+        .map(|(b, t)| (b.as_ref() as &(dyn ToSql + Sync), t.clone()))
         .collect();
-    execute(&pool, &query, &params_ref).await
+    execute_typed(&pool, &query, &params_ref).await
 }
 
 pub async fn update_record(
@@ -622,7 +622,8 @@ pub async fn update_record(
         escape_identifier(col_name)
     );
 
-    let mut bound_params: Vec<Box<dyn tokio_postgres::types::ToSql + Send + Sync>> = Vec::new();
+    let mut bound_params: Vec<(Box<dyn tokio_postgres::types::ToSql + Send + Sync>, Type)> =
+        Vec::new();
 
     let bound = bind_pg_value(
         new_val,
@@ -645,9 +646,9 @@ pub async fn update_record(
     query.push_str(&predicate);
     bound_params.extend(pk_params);
 
-    let params_ref: Vec<&(dyn ToSql + Sync)> = bound_params
+    let params_ref: Vec<(&(dyn ToSql + Sync), Type)> = bound_params
         .iter()
-        .map(|b| b.as_ref() as &(dyn ToSql + Sync))
+        .map(|(b, t)| (b.as_ref() as &(dyn ToSql + Sync), t.clone()))
         .collect();
 
     let first_pk_col = {
@@ -660,7 +661,7 @@ pub async fn update_record(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
-    execute(&pool, &query, &params_ref).await.map_err(|err| {
+    execute_typed(&pool, &query, &params_ref).await.map_err(|err| {
         update_record_error_context(
             err,
             schema,
@@ -724,7 +725,7 @@ pub async fn insert_record(
             }
         };
 
-    let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::with_capacity(entries.len());
+    let mut params: Vec<(Box<dyn ToSql + Sync + Send>, Type)> = Vec::with_capacity(entries.len());
     let mut vals_set: Vec<String> = Vec::with_capacity(entries.len());
 
     for (col_name, val) in entries.drain(..) {
@@ -752,12 +753,12 @@ pub async fn insert_record(
         vals_set.join(", ")
     );
 
-    let params: Vec<&(dyn ToSql + Sync)> = params
+    let params: Vec<(&(dyn ToSql + Sync), Type)> = params
         .iter()
-        .map(|b| b.as_ref() as &(dyn ToSql + Sync))
+        .map(|(b, t)| (b.as_ref() as &(dyn ToSql + Sync), t.clone()))
         .collect();
 
-    execute(&pool, &query, &params).await
+    execute_typed(&pool, &query, &params).await
 }
 
 pub async fn get_table_ddl(
