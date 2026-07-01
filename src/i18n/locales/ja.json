@@ -725,12 +725,14 @@
     "selectTypeFirst": "先にコンテキスト/ネームスペース/タイプを選択してください",
     "useK8s": "Kubernetes ポートフォワードを使用",
     "useK8sConnection": "保存された接続",
-    "advanced": "詳細設定",
     "startupScript": "起動スクリプト",
     "startupScriptDescription": "このデータソースへの新規接続ごとに実行される SQL です。SET / set_config（例: RLS のバイパス）などのセッション設定に使用します。複数のステートメントはセミコロンで区切ってください。",
     "startupScriptPlaceholder": "SELECT set_config('app.bypass_rls', 'on', false);",
     "scrollTabsLeft": "タブを左にスクロール",
-    "scrollTabsRight": "タブを右にスクロール"
+    "scrollTabsRight": "タブを右にスクロール",
+    "useIamAuth": "AWS IAM 認証を使用する (RDS)",
+    "useIamAuthHint": "パスワード欄は RDS 認証トークン (`aws rds generate-db-auth-token` の出力) として扱われます。TLS 必須。トークンの有効期限は 15 分です。",
+    "useIamAuthTlsRequired": "AWS IAM 認証を使用するには、上記で SSL モードを有効にしてください。"
   },
   "sshConnections": {
     "title": "SSH 接続",

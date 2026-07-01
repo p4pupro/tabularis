@@ -711,12 +711,14 @@
     "selectTypeFirst": "Sélectionnez d'abord contexte/namespace/type",
     "useK8s": "Utiliser le Port-Forward Kubernetes",
     "useK8sConnection": "Connexion enregistrée",
-    "advanced": "Avancé",
     "startupScript": "Script de démarrage",
     "startupScriptDescription": "SQL exécuté à chaque nouvelle connexion à cette source de données. Utilisez-le pour des paramètres de session tels que SET / set_config (par exemple, pour contourner la RLS). Séparez les instructions par des points-virgules.",
     "startupScriptPlaceholder": "SELECT set_config('app.bypass_rls', 'on', false);",
     "scrollTabsLeft": "Défiler les onglets vers la gauche",
-    "scrollTabsRight": "Défiler les onglets vers la droite"
+    "scrollTabsRight": "Défiler les onglets vers la droite",
+    "useIamAuth": "Utiliser l'authentification AWS IAM (RDS)",
+    "useIamAuthHint": "Le champ mot de passe est traité comme un jeton d'authentification RDS (généré par `aws rds generate-db-auth-token`). Nécessite TLS. Les jetons expirent toutes les 15 minutes.",
+    "useIamAuthTlsRequired": "Activez un mode SSL ci-dessus pour utiliser l'authentification AWS IAM."
   },
   "sshConnections": {
     "title": "Connexions SSH",
