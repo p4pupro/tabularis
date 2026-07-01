@@ -46,7 +46,6 @@ export const Connections = () => {
     isConnectionOpen,
     switchConnection,
     connectionGroups,
-    createGroup,
     createGroupPath,
     updateGroup,
     moveGroupToParent,
@@ -570,7 +569,7 @@ export const Connections = () => {
 
       if (reparent) {
         const isAncestor = (maybeAncestorId: string): boolean => {
-          let cur = connectionGroups.find((g) => g.id === targetGroupId);
+          let cur = connectionGroups.find((g) => g.id === maybeAncestorId);
           while (cur) {
             if (cur.id === sourceGroupId) return true;
             cur = connectionGroups.find((g) => g.id === cur!.parent_id);
