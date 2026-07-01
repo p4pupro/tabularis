@@ -1442,21 +1442,6 @@ impl DatabaseDriver for MysqlDriver {
             .map_err(|e| e.to_string())
     }
 
-    /// Tests connectivity via the shared pool. The trait default builds a
-    /// fresh `AnyConnection` from a URL, which can't opt in to
-    /// `enable_cleartext_plugin` — required for RDS IAM auth.
-    async fn test_connection(
-        &self,
-        params: &crate::models::ConnectionParams,
-    ) -> Result<(), String> {
-        let conn_id = params.connection_id.as_deref();
-        let pool = crate::pool_manager::get_mysql_pool_with_id(params, conn_id).await?;
-        let mut conn = pool.acquire().await.map_err(|e| e.to_string())?;
-        sqlx::Connection::ping(&mut *conn)
-            .await
-            .map_err(|e| e.to_string())
-    }
-
     async fn get_databases(
         &self,
         params: &crate::models::ConnectionParams,
