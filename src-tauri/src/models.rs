@@ -1,6 +1,28 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
+
+/// Returns the set of group IDs that form the subtree rooted at `root_id`,
+/// including the root itself. Walks `parent_id` pointers transitively so
+/// any number of nesting levels is collected. The caller is expected to
+/// have already verified that `root_id` exists; an unknown id yields a
+/// singleton set containing just that id (which won't match any record).
+pub fn collect_group_subtree(groups: &[ConnectionGroup], root_id: &str) -> HashSet<String> {
+    let mut to_delete: HashSet<String> = HashSet::new();
+    to_delete.insert(root_id.to_string());
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for g in groups {
+            if let Some(parent) = g.parent_id.as_ref() {
+                if to_delete.contains(parent) && to_delete.insert(g.id.clone()) {
+                    changed = true;
+                }
+            }
+        }
+    }
+    to_delete
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]

@@ -872,25 +872,17 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const deleteGroup = useCallback(async (id: string): Promise<void> => {
+    // The backend cascade-deletes the target group, every nested child
+    // group, and all connections belonging to any group in that subtree.
+    // Re-load from the backend instead of mirroring the cascade in
+    // optimistic state — this keeps the optimistic update trivial and
+    // guarantees the UI matches the persisted file even if the cascade
+    // behaviour evolves.
     await invoke('delete_connection_group', { id });
-    // Direct children are re-parented to the deleted group's parent by
-    // the backend. Reflect that in the optimistic state update so the UI
-    // doesn't briefly show them in limbo.
-    const deleted = connectionGroups.find(g => g.id === id);
-    const newParent = deleted?.parent_id ?? null;
-    setConnectionGroups(prev =>
-      prev
-        .filter(g => g.id !== id)
-        .map(g =>
-          g.parent_id === id ? { ...g, parent_id: newParent } : g
-        )
-    );
-    // Connections in the deleted group become ungrouped (backend sets
-    // their group_id to None).
-    setConnections(prev =>
-      prev.map(c => (c.group_id === id ? { ...c, group_id: undefined } : c))
-    );
-  }, [connectionGroups]);
+    const fresh = await invoke<ConnectionsFile>('get_connections_with_groups');
+    setConnections(fresh.connections);
+    setConnectionGroups(fresh.groups);
+  }, []);
 
   const moveConnectionToGroup = useCallback(async (
     connectionId: string,

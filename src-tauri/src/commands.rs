@@ -2618,6 +2618,162 @@ mod tests {
             assert!(state.handles.lock().unwrap().get("conn-1").is_none());
         }
     }
+
+    // -------------------------------------------------------------------
+    // Cascade-delete helpers
+    // -------------------------------------------------------------------
+
+    fn group(id: &str, parent: Option<&str>) -> ConnectionGroup {
+        ConnectionGroup {
+            id: id.to_string(),
+            name: id.to_string(),
+            collapsed: false,
+            sort_order: 0,
+            parent_id: parent.map(|p| p.to_string()),
+        }
+    }
+
+    fn conn(id: &str, group_id: Option<&str>) -> SavedConnection {
+        let mut c = saved_conn(id, None, false);
+        c.group_id = group_id.map(|g| g.to_string());
+        c
+    }
+
+    #[test]
+    fn collect_group_subtree_returns_root_only_for_leaf() {
+        let groups = vec![group("a", None), group("b", None)];
+        let subtree = crate::models::collect_group_subtree(&groups, "a");
+        assert_eq!(subtree, std::collections::HashSet::from(["a".to_string()]));
+    }
+
+    #[test]
+    fn collect_group_subtree_walks_full_descendant_chain() {
+        // Tree:
+        //   root
+        //   ├── child1
+        //   │   └── grand1
+        //   │       └── great1
+        //   └── child2
+        //   other (unrelated)
+        let groups = vec![
+            group("root", None),
+            group("child1", Some("root")),
+            group("grand1", Some("child1")),
+            group("great1", Some("grand1")),
+            group("child2", Some("root")),
+            group("other", None),
+        ];
+        let subtree = crate::models::collect_group_subtree(&groups, "root");
+        assert_eq!(
+            subtree,
+            std::collections::HashSet::from([
+                "root".to_string(),
+                "child1".to_string(),
+                "grand1".to_string(),
+                "great1".to_string(),
+                "child2".to_string(),
+            ])
+        );
+        assert!(!subtree.contains("other"));
+    }
+
+    #[test]
+    fn collect_group_subtree_for_subgroup_does_not_include_siblings() {
+        // Tree:
+        //   root
+        //   ├── keep
+        //   └── drop
+        let groups = vec![
+            group("root", None),
+            group("keep", Some("root")),
+            group("drop", Some("root")),
+        ];
+        let subtree = crate::models::collect_group_subtree(&groups, "drop");
+        assert_eq!(subtree, std::collections::HashSet::from(["drop".to_string()]));
+        assert!(!subtree.contains("root"));
+        assert!(!subtree.contains("keep"));
+    }
+
+    #[test]
+    fn collect_group_subtree_for_unknown_id_is_singleton() {
+        let groups = vec![group("a", None)];
+        let subtree = crate::models::collect_group_subtree(&groups, "missing");
+        assert_eq!(subtree, std::collections::HashSet::from(["missing".to_string()]));
+    }
+
+    #[test]
+    fn cascade_delete_removes_parent_descendants_and_connections() {
+        // Mirrors what the command does after the helper returns: groups
+        // and connections not in the subtree must survive untouched.
+        let groups = vec![
+            group("root", None),
+            group("child", Some("root")),
+            group("grand", Some("child")),
+            group("sibling", None),
+        ];
+        let connections = vec![
+            conn("c1", Some("root")),
+            conn("c2", Some("child")),
+            conn("c3", Some("grand")),
+            conn("c4", Some("sibling")),
+            conn("c5", None),
+        ];
+        let to_delete = crate::models::collect_group_subtree(&groups, "root");
+
+        let groups_after: Vec<_> = groups
+            .iter()
+            .filter(|g| !to_delete.contains(&g.id))
+            .cloned()
+            .collect();
+        let conns_after: Vec<_> = connections
+            .iter()
+            .filter(|c| !c.group_id.as_ref().is_some_and(|g| to_delete.contains(g)))
+            .cloned()
+            .collect();
+
+        assert_eq!(groups_after, vec![group("sibling", None)]);
+        assert_eq!(
+            conns_after.iter().map(|c| c.id.clone()).collect::<Vec<_>>(),
+            vec!["c4".to_string(), "c5".to_string()],
+        );
+    }
+
+    #[test]
+    fn cascade_delete_subgroup_leaves_parent_and_other_subgroups_alone() {
+        let groups = vec![
+            group("root", None),
+            group("keep", Some("root")),
+            group("drop", Some("root")),
+            group("grand", Some("drop")),
+        ];
+        let connections = vec![
+            conn("c1", Some("root")),
+            conn("c2", Some("drop")),
+            conn("c3", Some("grand")),
+            conn("c4", Some("keep")),
+        ];
+        let to_delete = crate::models::collect_group_subtree(&groups, "drop");
+
+        let groups_after: Vec<_> = groups
+            .iter()
+            .filter(|g| !to_delete.contains(&g.id))
+            .cloned()
+            .collect();
+        let conns_after: Vec<_> = connections
+            .iter()
+            .filter(|c| !c.group_id.as_ref().is_some_and(|g| to_delete.contains(g)))
+            .cloned()
+            .collect();
+
+        assert_eq!(
+            groups_after,
+            vec![group("root", None), group("keep", Some("root"))],
+        );
+        assert_eq!(
+            conns_after.iter().map(|c| c.id.clone()).collect::<Vec<_>>(),
+            vec!["c1".to_string(), "c4".to_string()],
+        );
+    }
 }
 
 #[tauri::command]
@@ -4345,30 +4501,22 @@ pub async fn delete_connection_group<R: Runtime>(
     let path = get_config_path(&app)?;
     let mut file = persistence::load_connections_file(&path)?;
 
-    // Capture the deleted group's parent up-front so we can re-parent any
-    // direct child groups to the deleted group's parent. This is the standard
-    // "promote children to grandparent" behaviour from file-explorer UIs and
-    // matches what users expect when deleting a folder in Finder/Explorer.
-    let deleted_parent = file
-        .groups
-        .iter()
-        .find(|g| g.id == id)
-        .map(|g| g.parent_id.clone())
-        .ok_or_else(|| format!("Group with ID {} not found", id))?;
-
-    for g in &mut file.groups {
-        if g.parent_id.as_ref() == Some(&id) {
-            g.parent_id = deleted_parent.clone();
-        }
+    // Ensure the group exists before we walk the tree.
+    if !file.groups.iter().any(|g| g.id == id) {
+        return Err(format!("Group with ID {} not found", id));
     }
 
-    for conn in &mut file.connections {
-        if conn.group_id.as_ref() == Some(&id) {
-            conn.group_id = None;
-        }
-    }
+    // Cascade delete: collect the target group and all of its descendants
+    // (transitively) so the entire subtree is removed. The caller only
+    // needs to specify the top-level group — every nested child group is
+    // deleted along with it. Connections belonging to any group in the
+    // subtree are removed as well.
+    let to_delete = crate::models::collect_group_subtree(&file.groups, &id);
 
-    file.groups.retain(|g| g.id != id);
+    file.groups.retain(|g| !to_delete.contains(&g.id));
+    file.connections
+        .retain(|c| !c.group_id.as_ref().is_some_and(|gid| to_delete.contains(gid)));
+
     save_connections_and_invalidate(&app, &path, &file)?;
 
     Ok(())
